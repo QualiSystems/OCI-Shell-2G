@@ -1,0 +1,3 @@
+Debugging session started at: 14:30:11 08/12/19
+Python driver process is available for debugging at PID #29092
+Virtual environment is located at `C:\ProgramData\QualiSystems\venv\OCI_Shell_5_14\Scripts`

@@ -1,0 +1,39 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+metadata:
+  template_name: OCI Shell
+  template_author: Leeor Vardi & Alex Azarh
+  template_version: 0.0.1
+  template_icon: Oracle.png
+
+description: >
+  Deploy an OCI instance from an Image into the default network
+
+imports:
+  - cloudshell_standard: cloudshell_cloud_provider_standard_1_0_0.yaml
+
+node_types:
+  vendor.resource.OCI VM from Image:
+    derived_from: cloudshell.nodes.CustomDeploymentOption
+    properties:
+      Image ID:
+        type: string
+        default:
+        description: OCID of the Image to deploy the app from
+        tags: [user_input]
+      VM Shape:
+        type: string
+        default: VM.Standard1.1
+        description: The type of OCI Instance to deploy - see https://cloud.oracle.com/compute/pricing
+        constraints:
+          -  valid_values: [VM.Standard1.1, VM.Standard1.2, VM.Standard1.4, VM.Standard2.1, VM.Standard2.2, VM.Standard2.4]
+        tags: [user_input]
+      Add Public IP:
+        type: boolean
+        default:
+        description: True if the App needs to have a Public IP
+        tags: [user_input]
+    artifacts:
+      icon:
+        file: Oracle.png
+        type: tosca.artifacts.File

@@ -1,0 +1,139 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+metadata:
+  template_name: OCI Shell
+  template_author: Leeor Vardi & Alex Azarh
+  template_version: 0.0.1
+  template_icon: OCI.png
+
+description: >
+ Oracle Cloud Provider
+
+imports:
+  - cloudshell_standard: cloudshell_cloud_provider_standard_1_0_0.yaml
+  
+  
+node_types:
+ vendor.resource.OCI Shell:
+    derived_from: cloudshell.nodes.CustomCloudProvider
+    properties:
+      API User ID:
+        type: string
+        default: 
+        description: User ID for OCI API
+      API Key File Path:
+        type: string
+        default: 
+        description: Full path (including file name) to the API Private Key
+      API Key Passphrase:
+        type: string
+        default:
+        description: API Private Key passphrase
+      API Key File Fingerprint:
+        type: string
+        default: 
+        description: Fingerprint for the API Public key
+      Tenant ID:
+        type: string
+        default: 
+        description: OCID of the OCI Tenant to deploy on
+      Default Subnet:
+        type: string
+        default: 
+        description: OCID of the Default Subnet for VM deployments
+      Default Availability Domain:
+        type: string
+        default: 
+        description: Full name of the Default Availability Domain for VM deployments (example "rJhM\:EU-FRANKFURT-1-AD-1")
+      Compartment OCID:
+        type: string
+        default: 
+        description: OCID of the Default Compartment for VM deployments
+      Region:
+        type: string
+        default: 
+        description: OCI Region of the Cloud Provider
+        constraints:
+        - valid_values: ["us-phoenix-1", "us-ashburn-2", "eu-frankfurt-1", "uk-london-1"]
+      Default Keypair:
+        type: string
+        default: 
+        description: Name of default Keypair for new instances
+      Keypairs Path:
+        type: string
+        default: 
+        description: Path to Local Keypair repository
+    capabilities:
+      concurrent_execution:
+        type: cloudshell.capabilities.SupportConcurrentCommands
+      auto_discovery_capability:
+        type: cloudshell.capabilities.AutoDiscovery
+        properties:        
+          API User ID:
+            type: string
+            default: 
+            description: User OCID
+          API Key File Path:
+            type: string
+            default: 
+            description: Full path (including file name) to the User API Private pem Key
+          API Key Passphrase:
+            type: string
+            default:
+            description: API Private Key passphrase
+          API Key File Fingerprint:
+            type: string
+            default: 
+            description: Fingerprint for the User API Public key
+          Tenant ID:
+            type: string
+            default: 
+            description: Tenant OCID for deployment
+          Default Subnet:
+            type: string
+            default: 
+            description: Default Subnet OCID for VM deployments
+          Default Availability Domain:
+            type: string
+            default:
+            description: Full name of the Default Availability Domain for VM deployments (example "rJhM\:EU-FRANKFURT-1-AD-1")
+          Compartment OCID:
+            type: string
+            default: 
+            description: OCID of the Default Compartment for VM deployments
+          Region:
+            type: string
+            default: 
+            description: OCI Region of the Cloud Provider
+            constraints:
+            - valid_values: ["us-phoenix-1", "us-ashburn-2", "eu-frankfurt-1", "uk-london-1"]
+          Default Keypair:
+            type: string
+            default: 
+            description: Name of default Keypair for new instances
+          Keypairs Path:
+            type: string
+            default: 
+            description: Path to Local Keypair repository
+          enable_auto_discovery:
+            type: boolean
+            default: true
+          auto_discovery_description:
+            type: string
+            default: Populate the Cloud Provider's custom attributes
+          inventory_description:
+            type: string
+            default: A lightweight OCI Shell with limited networking capabilities
+          hide_address:
+            type: string
+            default: true
+    artifacts:
+      icon:
+        file: OCI.png
+        type: tosca.artifacts.File
+      driver:
+        file: OCIShellDriver.zip
+        type: tosca.artifacts.File
+      deployment:
+        file: Deployments.zip
+        type: tosca.artifacts.File
