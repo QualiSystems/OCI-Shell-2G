@@ -1,4 +1,5 @@
-from collections import OrderedDict
+
+from copy import copy
 
 import time
 import json
@@ -11,8 +12,7 @@ from cloudshell.shell.core.driver_context import AutoLoadDetails
 from cloudshell.cp.core import DriverRequestParser
 from cloudshell.cp.core.models import DeployApp, DeployAppResult, DriverResponse, VmDetailsData, VmDetailsProperty, \
     VmDetailsNetworkInterface, Attribute, ConnectSubnet
-from cloudshell.cp.core.models import PrepareCloudInfraResult, CreateKeysActionResult, ActionResultBase, \
-    PrepareSubnetActionResult
+from cloudshell.cp.core.models import PrepareCloudInfraResult, CreateKeysActionResult, ActionResultBase
 
 from cloudshell.shell.core.resource_driver_interface import ResourceDriverInterface
 from cloudshell.shell.core.session.logging_session import LoggingSessionContext
@@ -109,12 +109,13 @@ class OCIShellDriver(ResourceDriverInterface):
         api.WriteMessageToReservationOutput(context.reservation.reservation_id, 'Request JSON: ' + request)
 
         deploy_action = None
-        subnet_actions = OrderedDict()
+        subnet_actions = list()
+        # subnet_actions = OrderedDict()
         for action in actions:
             if isinstance(action, DeployApp):
                 deploy_action = action
             if isinstance(action, ConnectSubnet):
-                subnet_actions[action.actionParams.vnicName] = action
+                subnet_actions.append(action)
 
         if deploy_action:
 
@@ -149,24 +150,20 @@ class OCIShellDriver(ResourceDriverInterface):
             subnet_id = subnet.id
             vnic_id = context.reservation.reservation_id
             if subnet_actions:
-                secondary_subnet_actions = subnet_actions
-                try:
-                    vnic_id = self._get_val_by_key_suffix(deploy_attribs, "Vnic Name")
-                    subnet_id = subnet_actions.get(vnic_id).actionParams.subnetId
-                    secondary_subnet_actions.pop(vnic_id)
-                except KeyError as e:
-                    primary_vnic = secondary_subnet_actions.pop(subnet_actions.keys()[0])
-                    subnet_id = primary_vnic.actionParams.subnetId
+                subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
+                primary_vnic_action = subnet_actions[0]
+                primary_vnic0_action = next(
+                    action for action in subnet_actions if action.actionParams.vnicName == "0")
+                if primary_vnic0_action:
+                    primary_vnic_action = primary_vnic0_action
 
+                secondary_subnet_actions = copy(subnet_actions)
+                secondary_subnet_actions.remove(primary_vnic_action)
+
+                subnet_id = primary_vnic_action.actionParams.subnetId
                 subnet = next(s for s in subnets if s.id == subnet_id)
 
             availability_domain = subnet.availability_domain
-            # if not availability_domain:
-            #     list_availability_domains_response = oci.pagination.list_call_get_all_results(
-            #         self.identity_client.list_availability_domains,
-            #         resource_config.compartment_ocid
-            #     )
-            #     availability_domain = list_availability_domains_response.data[0]
 
             image_id = self._get_val_by_key_suffix(deploy_attribs, "Image ID")
             public_ip_str = self._get_val_by_key_suffix(deploy_attribs, "Public IP")
@@ -228,6 +225,7 @@ class OCIShellDriver(ResourceDriverInterface):
                 raise RuntimeError("Timeout when waiting for VM to Power on")
 
             # If windows instance, wait for "Ok" Status
+            # app_details = None
             app_details = next(
                 app for app in api.GetReservationDetails(context.reservation.reservation_id).ReservationDescription.Apps
                 if app.Name == app_name)
@@ -255,29 +253,26 @@ class OCIShellDriver(ResourceDriverInterface):
                 vnic for vnic in vnic_attachments.data if vnic.instance_id == launch_instance_result.data.id)
             vnic_details = self.network_client.get_vnic(instance_vnic_attachment.vnic_id)
 
-            for vnic in secondary_subnet_actions:
-                secondary_vnic = secondary_subnet_actions.get(vnic)
-                secondary_vnic_details = CreateVnicDetails(assign_public_ip=secondary_vnic.actionParams.isPublic,
-                                                           display_name=vnic,
-                                                           subnet_id=secondary_vnic.actionParams.subnetId
-                                                           )
-
-                secondary_vnic_attach_details = AttachVnicDetails(create_vnic_details=secondary_vnic_details,
-                                                                  display_name=vnic,
-                                                                  instance_id=launch_instance_result.data.id,
-                                                                  nic_index=subnet_actions.keys().index(vnic))
-                self.compute_client.attach_vnic(secondary_vnic_attach_details)
-
             instace_update = oci.core.models.UpdateInstanceDetails()
             instace_update.display_name = instance_name
 
             self.compute_client.update_instance(instance_details.data.id, instace_update)
 
+            for vnic_action in secondary_subnet_actions:
+                secondary_vnic_details = CreateVnicDetails(assign_public_ip=vnic_action.actionParams.isPublic,
+                                                           display_name=vnic_action.actionId,
+                                                           subnet_id=vnic_action.actionParams.subnetId
+                                                           )
+                secondary_vnic_attach_details = AttachVnicDetails(create_vnic_details=secondary_vnic_details,
+                                                                  display_name=vnic_action.actionId,
+                                                                  instance_id=launch_instance_result.data.id)
+                self.compute_client.attach_vnic(secondary_vnic_attach_details)
+
             deploy_result = DeployAppResult(actionId=deploy_action.actionId,
                                             infoMessage="Deployment Completed Successfully",
                                             vmUuid=instance_details.data.id,
                                             vmName=instance_name,
-                                            deployedAppAddress=vnic_details.data.private_ip,
+                                            deployedAppAddress=vnic_details.data.public_ip,
                                             deployedAppAttributes=attributes,
                                             vmDetailsData=self._create_vm_details(context, instance_name,
                                                                                   deploy_action.actionParams.deployment.deploymentPath,
@@ -522,7 +517,7 @@ class OCIShellDriver(ResourceDriverInterface):
         vm_nic.isPrimary = True
         vm_nic.isPredefined = True
         vm_nic.privateIpAddress = instance_nic.data.private_ip
-        vm_nic.networkData.append(VmDetailsProperty("IP", instance_nic.data.public_ip))
+        vm_nic.networkData.append(VmDetailsProperty("IP", instance_nic.data.private_ip))
         vm_nic.networkData.append(VmDetailsProperty("Public IP", instance_nic.data.public_ip))
         vm_nic.networkData.append(VmDetailsProperty("MAC Address", instance_nic.data.mac_address))
         vm_nic.networkData.append(VmDetailsProperty("VLAN Name",
@@ -646,8 +641,26 @@ class OCIShellDriver(ResourceDriverInterface):
         api = CloudShellSessionContext(context).get_api()
         # DEBUG    api.WriteMessageToReservationOutput(context.reservation.reservation_id, 'Cleanup Request JSON: ' + request)
         json_request = json.loads(request)
+        resource_config = OCIShellDriverResource.create_from_context(context)
+        virt_net_client = VirtualNetworkClientCompositeOperations(self.network_client)
+
         cleanup_action_id = next(action["actionId"] for action in json_request["driverRequest"]["actions"] if
                                  action["type"] == "cleanupNetwork")
+
+        vcn = self._get_unique_vcn_by_name(resource_config.compartment_ocid, context.reservation.reservation_id)
+        subnets = self._get_unique_subnet_by_cidr(resource_config.compartment_ocid, vcn_id=vcn)
+        service_gateways = self._get_vcn_service_gateways(resource_config.compartment_ocid, vcn_id=vcn)
+        for subnet in subnets:
+            virt_net_client.delete_subnet_and_wait_for_state(subnet.id,
+                                                             [oci.core.models.Subnet.LIFECYCLE_STATE_TERMINATED])
+        for service_gw in service_gateways:
+            virt_net_client.delete_service_gateway_and_wait_for_state(
+                service_gw.id,
+                [oci.core.models.ServiceGateway.LIFECYCLE_STATE_TERMINATED]
+            )
+        virt_net_client.delete_vcn_and_wait_for_state(vcn.id,
+                                                      [oci.core.models.Vcn.LIFECYCLE_STATE_TERMINATED])
+
         cleanup_result = ActionResultBase("cleanupNetwork", cleanup_action_id)
 
         return self._set_command_result({'driverResponse': {'actionResults': [cleanup_result]}})
@@ -675,14 +688,12 @@ class OCIShellDriver(ResourceDriverInterface):
     def _get_unique_subnet_by_cidr(self, compartment_id, vcn_id, subnet_cidr=None):
         """
         Find a unique Subnet by name.
-        :param network_client: OCI VirtualNetworkClient client
-        :type network_client: oci.core.VirtualNetworkClient
         :param compartment_id: The OCID of the compartment which owns the VCN.
         :type compartment_id: str
         :param vcn_id: The OCID of the VCN which will own the subnet.
         :type vcn_id: str
-        :param display_name: The display name of the subnet.
-        :type display_name: str
+        :param subnet_cidr: Subnet CIDR.
+        :type subnet_cidr: str
         :return: The Subnet
         :rtype: core_models.Subnet
         """
@@ -698,3 +709,21 @@ class OCIShellDriver(ResourceDriverInterface):
         for item in result.data:
             if subnet_cidr == item.cidr_block:
                 return item
+
+    def _get_vcn_service_gateways(self, compartment_id, vcn_id):
+        """
+        Find a unique Subnet by name.
+        :param compartment_id: The OCID of the compartment which owns the VCN.
+        :type compartment_id: str
+        :param vcn_id: The OCID of the VCN which will own the subnet.
+        :type vcn_id: str
+        :return: The Subnet
+        :rtype: core_models.Subnet
+        """
+        result = pagination.list_call_get_all_results(
+            self.network_client.list_service_gateways,
+            compartment_id,
+            vcn_id
+        )
+
+        return result.data
