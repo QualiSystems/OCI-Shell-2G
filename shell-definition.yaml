@@ -2,8 +2,8 @@ tosca_definitions_version: tosca_simple_yaml_1_0
 
 metadata:
   template_name: OCI Shell
-  template_author: Leeor Vardi & Alex Azarh
-  template_version: 0.0.1
+  template_author: Quali
+  template_version: 1.0.0
   template_icon: OCI.png
 
 description: >
@@ -24,11 +24,11 @@ node_types:
       API Key File Path:
         type: string
         default: 
-        description: Full path (including file name) to the API Private Key
+        description: Full path (including file name) to the API Pem Key
       API Key Passphrase:
         type: string
         default:
-        description: API Private Key passphrase
+        description: API Pem Key passphrase
       API Key File Fingerprint:
         type: string
         default: 
@@ -37,14 +37,6 @@ node_types:
         type: string
         default: 
         description: OCID of the OCI Tenant to deploy on
-      Default Subnet:
-        type: string
-        default: 
-        description: OCID of the Default Subnet for VM deployments
-      Default Availability Domain:
-        type: string
-        default: 
-        description: Full name of the Default Availability Domain for VM deployments (example "rJhM\:EU-FRANKFURT-1-AD-1")
       Compartment OCID:
         type: string
         default: 
@@ -89,14 +81,6 @@ node_types:
             type: string
             default: 
             description: Tenant OCID for deployment
-          Default Subnet:
-            type: string
-            default: 
-            description: Default Subnet OCID for VM deployments
-          Default Availability Domain:
-            type: string
-            default:
-            description: Full name of the Default Availability Domain for VM deployments (example "rJhM\:EU-FRANKFURT-1-AD-1")
           Compartment OCID:
             type: string
             default: 

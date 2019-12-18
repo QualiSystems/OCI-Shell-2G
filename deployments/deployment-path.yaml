@@ -2,8 +2,8 @@ tosca_definitions_version: tosca_simple_yaml_1_0
 
 metadata:
   template_name: OCI Shell
-  template_author: Leeor Vardi & Alex Azarh
-  template_version: 0.0.1
+  template_author: Quali
+  template_version: 1.0.0
   template_icon: Oracle.png
 
 description: >
@@ -32,6 +32,13 @@ node_types:
         type: boolean
         default:
         description: True if the App needs to have a Public IP
+        tags: [user_input]
+      Inbound Ports:
+        type: string
+        default:
+        description: "Ports and protocol to open inbound traffic from outside of the sandbox.
+        The syntax is port[single/range]:protocol [tcp(default)/udp] with semi-colon separation,
+        for example: 80;443:tcp;200-220:udp."
         tags: [user_input]
     artifacts:
       icon:

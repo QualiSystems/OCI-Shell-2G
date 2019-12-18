@@ -1,3 +1,4 @@
+import re
 from copy import copy
 
 import time
@@ -6,11 +7,11 @@ import jsonpickle
 import oci
 
 from cloudshell.shell.core.session.cloudshell_session import CloudShellSessionContext
-from cloudshell.shell.core.driver_context import AutoLoadDetails
+from cloudshell.shell.core.driver_context import AutoLoadDetails, ResourceRemoteCommandContext
 
 from cloudshell.cp.core import DriverRequestParser
 from cloudshell.cp.core.models import DeployApp, DeployAppResult, DriverResponse, VmDetailsData, VmDetailsProperty, \
-    VmDetailsNetworkInterface, Attribute, ConnectSubnet, PrepareSubnetActionResult
+    VmDetailsNetworkInterface, Attribute, ConnectSubnet, PrepareSubnetActionResult, ConnectToSubnetActionResult
 from cloudshell.cp.core.models import PrepareCloudInfraResult, CreateKeysActionResult, ActionResultBase
 
 from cloudshell.shell.core.resource_driver_interface import ResourceDriverInterface
@@ -23,6 +24,8 @@ from data_model import OCIShellDriverResource
 
 
 class OCIShellDriver(ResourceDriverInterface):
+    STATIC_CIDR = "0.0.0.0/0"
+
     def __init__(self):
         """
         ctor must be without arguments, it is created with reflection at run time
@@ -70,14 +73,18 @@ class OCIShellDriver(ResourceDriverInterface):
         self.network_client = oci.core.VirtualNetworkClient(self.config)
         self.storage_client = oci.core.BlockstorageClient(self.config)
         self.identity_client = oci.identity.IdentityClient(self.config)
+        self.network_client_ops = VirtualNetworkClientCompositeOperations(self.network_client)
+        self.compute_client_ops = oci.core.ComputeClientCompositeOperations(self.compute_client)
+        self.storage_client_ops = oci.core.BlockstorageClientCompositeOperations(self.storage_client)
 
-    def _get_connected_instance_id(self, context):
+    def _get_connected_instance_id(self, context, api=None):
         """ Retrieve UID of the VM the resource represents
         :param context: 
         :return: 
         """
 
-        api = CloudShellSessionContext(context).get_api()
+        if not api:
+            api = CloudShellSessionContext(context).get_api()
         parent_connected_resource = api.GetResourceDetails(context.remote_endpoints[0].fullname.split('/')[0])
         try:
             instance_id = [attribute.Value for attribute in parent_connected_resource.ResourceAttributes if
@@ -105,7 +112,7 @@ class OCIShellDriver(ResourceDriverInterface):
 
         actions = self.request_parser.convert_driver_request_to_actions(request)
         api = CloudShellSessionContext(context).get_api()
-        api.WriteMessageToReservationOutput(context.reservation.reservation_id, 'Request JSON: ' + request)
+        # api.WriteMessageToReservationOutput(context.reservation.reservation_id, 'Request JSON: ' + request)
 
         deploy_action = None
         subnet_actions = list()
@@ -122,24 +129,27 @@ class OCIShellDriver(ResourceDriverInterface):
             try:
                 deploy_method = next(self.deployments[deployment] for deployment in self.deployments.keys() if
                                      deployment_name.endswith(deployment))
-                deploy_result = deploy_method(context, api, deploy_action, subnet_actions, cancellation_context)
-                return DriverResponse([deploy_result]).to_driver_response_json()
             except StopIteration:
                 raise Exception('Could not find the deployment ' + deployment_name)
+            results = deploy_method(context, api, deploy_action, subnet_actions, cancellation_context)
+            return DriverResponse(results).to_driver_response_json()
         else:
             raise Exception('Failed to deploy VM')
 
     def vm_from_image(self, context, api, deploy_action, subnet_actions, cancellation_context):
         """
         :type subnet_actions: list<ConnectSubnet>
+        :type context: ResourceCommandContext
         """
-
         # Init CloudShell and OCI APIs
         with LoggingSessionContext(context) as logger:
-
+            logger.info("Starting Deployment from Image")
             resource_config = OCIShellDriverResource.create_from_context(context)
             self._connect_oracle_session(resource_config)
+            compute_client_composite_operations = oci.core.ComputeClientCompositeOperations(self.compute_client)
             secondary_subnet_actions = {}
+            network_results = []
+
             # Read deployment attributes
             app_name = deploy_action.actionParams.appName
             deploy_attribs = deploy_action.actionParams.deployment.attributes
@@ -149,11 +159,12 @@ class OCIShellDriver(ResourceDriverInterface):
             subnets = self._get_unique_subnet_by_cidr(resource_config.compartment_ocid, vcn_id=vcn.id)
             subnet = subnets[0]
             subnet_id = subnet.id
+            primary_vnic_action = None
             if subnet_actions:
                 subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
                 primary_vnic_action = subnet_actions[0]
-                primary_vnic0_action = next(
-                    action for action in subnet_actions if action.actionParams.vnicName == "0")
+                primary_vnic0_action = next((
+                    action for action in subnet_actions if action.actionParams.vnicName == "0"), None)
                 if primary_vnic0_action:
                     primary_vnic_action = primary_vnic0_action
 
@@ -171,23 +182,22 @@ class OCIShellDriver(ResourceDriverInterface):
             public_ip_str = self._get_val_by_key_suffix(deploy_attribs, "Public IP")
             public_ip = public_ip_str.lower() == "true"
             vm_shape = self._get_val_by_key_suffix(deploy_attribs, "VM Shape")
+            inbound_ports = self._get_val_by_key_suffix(deploy_attribs, "Inbound Ports")
+
             try:
                 user = self._get_val_by_key_suffix(deploy_attribs, "User")
-            except:
-                user = ""
-            try:
                 password = self._get_val_by_key_suffix(deploy_attribs, "Password")
             except:
+                user = ""
                 password = ""
 
+            # ToDo replace this part with ssh keys retrieving from oci bucket
             keys_path = resource_config.keypairs_path
             if not keys_path.endswith("\\"):
                 keys_path += "\\"
             ssh_pub_key_path = "{}{}.pub".format(keys_path, resource_config.default_keypair)
             default_ssh_pub_key = str(open(ssh_pub_key_path).read())
             ssh_pub_key = default_ssh_pub_key
-            # ssh_pub_key = self.reservation_to_ssh_keys_map.get(context.reservation.reservation_id,
-            #                                                    default_ssh_pub_key)
 
             new_inst_details = oci.core.models.LaunchInstanceDetails()
             # CreateVnicDetails
@@ -195,85 +205,77 @@ class OCIShellDriver(ResourceDriverInterface):
             new_inst_details.compartment_id = resource_config.compartment_ocid
             new_inst_details.subnet_id = subnet_id
             new_inst_details.display_name = app_name
+            new_inst_details.freeform_tags = self._get_tags(context)
             new_inst_details.create_vnic_details = CreateVnicDetails(assign_public_ip=public_ip,
                                                                      display_name=context.reservation.reservation_id,
-                                                                     subnet_id=subnet_id
-                                                                     )
+                                                                     subnet_id=subnet_id)
             new_inst_details.shape = vm_shape
             new_inst_details.image_id = image_id
-            new_inst_details.metadata = {
-                'ssh_authorized_keys': ssh_pub_key
-            }
+            new_inst_details.metadata = {'ssh_authorized_keys': ssh_pub_key}
 
             # Create the VM
-            # DEBUG
-            # api.WriteMessageToReservationOutput(context.reservation.reservation_id,
-            #                                     "Launching Instance of shape {0} of image {1} in AD {2} Subnet {3}".
-            #                                     format(new_inst_details.shape, new_inst_details.image_id, new_inst_details.availability_domain, new_inst_details.subnet_id))
-            # launch_instance_result = self.compute_client.launch_instance(new_inst_details)
-            compute_client_composite_operations = oci.core.ComputeClientCompositeOperations(self.compute_client)
             launch_instance_response = compute_client_composite_operations.launch_instance_and_wait_for_state(
                 new_inst_details,
-                wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING]
-            )
+                wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING],
+                operation_kwargs={"retry_strategy": oci.retry.DEFAULT_RETRY_STRATEGY})
             instance = launch_instance_response.data
 
-            # instance_details = self.compute_client.get_instance(launch_instance_result.data.id)
-
-            # Wait for "Running" Status
-            # wait_time = 0
-            # while instance_details.data.lifecycle_state != "RUNNING" and wait_time <= 600:
-            #     time.sleep(2)
-            #     wait_time = wait_time + 2
-            #     instance_details = self.compute_client.get_instance(instance.data.id)
-
             if not instance:
-                # termination_response = self.compute_client.terminate_instance(instance_details.data.id)
                 raise RuntimeError("Timeout when waiting for VM to Power on")
 
             instance_name = app_name + " " + instance.id.split(".")[-1][-10:]
-
-            # If windows instance, wait for "Ok" Status
-            app_details = next((
-                app for app in api.GetReservationDetails(context.reservation.reservation_id).ReservationDescription.Apps
-                if app.Name == app_name), None)
-            app_os = ""
-            if app_details:
-                try:
-                    app_os = next(att.Value for att in app_details.LogicalResource.Attributes if
-                                  att.Name in ["OS", "Operating System"])
-                except:
-                    pass
-
             attributes = []
 
-            if "windows" in app_os.lower() and (password == "" or api.DecryptPassword(password).Value == ""):
-                instance_credentials = self.compute_client.get_windows_instance_initial_credentials(
-                    instance.id)
+            try:
+                instance_credentials = self.compute_client.get_windows_instance_initial_credentials(instance.id)
                 attributes.append(Attribute("User", instance_credentials.data.username))
                 attributes.append(Attribute("Password", instance_credentials.data.password))
-            elif user:
+            except (oci.exceptions.ServiceError, oci.exceptions.RequestException):
                 attributes.append(Attribute("User", user))
                 attributes.append(Attribute("Password", password))
 
             # set resource attributes (of the new resource) to use requested username and password
 
             vnic_attachments = self.compute_client.list_vnic_attachments(resource_config.compartment_ocid)
-            instance_vnic_attachment = next((
-                vnic for vnic in vnic_attachments.data if vnic.instance_id == instance.id), None)
-            vnic_public_ip = ""
-            if instance_vnic_attachment:
-                vnic_details = self.network_client.get_vnic(instance_vnic_attachment.vnic_id)
-                vnic_public_ip = vnic_details.data.public_ip
+
+            vnic_attachment = next((vnic for vnic in vnic_attachments.data if vnic.instance_id == instance.id), None)
+            if not vnic_attachment:
+                raise Exception("No vnic")
+            vnic_details = self.network_client.get_vnic(vnic_attachment.vnic_id)
+            vnic_public_ip = vnic_details.data.public_ip
+
+            if primary_vnic_action:
+                primary_interface_json = json.dumps({
+                    'interface_id': vnic_details.data.id,
+                    'IP': vnic_details.data.private_ip,
+                    'Public IP': vnic_public_ip,
+                    'MAC Address': vnic_details.data.mac_address
+                })
+                network_results.append(ConnectToSubnetActionResult(actionId=primary_vnic_action.actionId,
+                                                                   interface=primary_interface_json))
+
+            if inbound_ports:
+                new_security_list_item = self._add_security_list(compartment_ocid=resource_config.compartment_ocid,
+                                                                 vcn_id=subnet.vcn_id,
+                                                                 security_list_name=context.reservation.reservation_id,
+                                                                 inbound_ports=inbound_ports,
+                                                                 tags=self._get_tags(context))
+
+                if new_security_list_item:
+                    new_security_list = subnet.security_list_ids
+                    new_security_list.append(new_security_list_item.data.id)
+                    self.network_client_ops.update_subnet_and_wait_for_state(
+                        subnet.id,
+                        oci.core.models.UpdateSubnetDetails(security_list_ids=new_security_list),
+                        [oci.core.models.Subnet.LIFECYCLE_STATE_AVAILABLE])
 
             instance_update = oci.core.models.UpdateInstanceDetails()
             instance_update.display_name = instance_name
 
-            compute_client_composite_operations.update_instance_and_wait_for_state(instance.id,
-                                                                                   instance_update,
-                                                                                   wait_for_states=[
-                                                                                       oci.core.models.Instance.LIFECYCLE_STATE_RUNNING])
-            # self.compute_client.update_instance(instance.id, instace_update)
+            compute_client_composite_operations.update_instance_and_wait_for_state(
+                instance.id,
+                instance_update,
+                wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING])
 
             for vnic_action in secondary_subnet_actions:
                 secondary_vnic_details = CreateVnicDetails(assign_public_ip=vnic_action.actionParams.isPublic,
@@ -283,11 +285,21 @@ class OCIShellDriver(ResourceDriverInterface):
                 secondary_vnic_attach_details = AttachVnicDetails(create_vnic_details=secondary_vnic_details,
                                                                   display_name=vnic_action.actionId,
                                                                   instance_id=instance.id)
-                compute_client_composite_operations.attach_vnic_and_wait_for_state(secondary_vnic_attach_details,
-                                                                                   [
-                                                            oci.core.models.VnicAttachment.LIFECYCLE_STATE_ATTACHED
-                                                                                   ])
-                # self.compute_client.attach_vnic(secondary_vnic_attach_details)
+                result = compute_client_composite_operations.attach_vnic_and_wait_for_state(
+                    secondary_vnic_attach_details,
+                    [
+                        oci.core.models.VnicAttachment.LIFECYCLE_STATE_ATTACHED
+                    ])
+                vnic_details = self.network_client.get_vnic(result.data.vnic_id)
+
+                interface_json = json.dumps({
+                    'interface_id': vnic_details.data.id,
+                    'IP': vnic_details.data.private_ip,
+                    'Public IP': vnic_details.data.public_ip,
+                    'MAC Address': vnic_details.data.mac_address,
+                })
+                network_results.append(
+                    ConnectToSubnetActionResult(actionId=vnic_action.actionId, interface=interface_json))
 
             deploy_result = DeployAppResult(actionId=deploy_action.actionId,
                                             infoMessage="Deployment Completed Successfully",
@@ -295,7 +307,7 @@ class OCIShellDriver(ResourceDriverInterface):
                                             vmName=instance_name,
                                             deployedAppAddress=vnic_public_ip,
                                             deployedAppAttributes=attributes,
-                                            vmDetailsData=self._create_vm_details(context, instance_name,
+                                            vmDetailsData=self._create_vm_details(context, api, instance_name,
                                                                                   deploy_action.actionParams.deployment.deploymentPath,
                                                                                   instance.id))
 
@@ -306,7 +318,9 @@ class OCIShellDriver(ResourceDriverInterface):
                     instance_details = self.compute_client.get_instance(instance.id)
                 return "deployment cancelled and deleted successfully"
 
-            return deploy_result
+            action_results = [deploy_result]
+            action_results.extend(network_results)
+            return action_results
 
     def ApplyConnectivityChanges(self, context, request):
         """
@@ -489,16 +503,18 @@ class OCIShellDriver(ResourceDriverInterface):
         :param requests: str JSON - requests for VMs to refresh 
         :return: 
         """
+
+        api = CloudShellSessionContext(context).get_api()
         requests_json = json.loads(requests)
         vm_details_results = []
         for refresh_request in requests_json["items"]:
             vm_details_results.append(
-                self._create_vm_details(context, vm_name=refresh_request["deployedAppJson"]["name"],
+                self._create_vm_details(context, api=api, vm_name=refresh_request["deployedAppJson"]["name"],
                                         deployment_service_name=refresh_request["appRequestJson"]["deploymentService"][
                                             "name"]))
         return str(jsonpickle.encode(vm_details_results, unpicklable=False))
 
-    def _create_vm_details(self, context, vm_name, deployment_service_name, instance_id=None):
+    def _create_vm_details(self, context, api, vm_name, deployment_service_name, instance_id=None):
         """ Create the VM Details results used for both Deployment and Refresh VM Details
         :param context: 
         :param vm_name: 
@@ -506,7 +522,7 @@ class OCIShellDriver(ResourceDriverInterface):
         :param instance_id: 
         :return: 
         """
-        api = CloudShellSessionContext(context).get_api()
+
         resource_config = OCIShellDriverResource.create_from_context(context)
 
         self._connect_oracle_session(resource_config)
@@ -549,10 +565,122 @@ class OCIShellDriver(ResourceDriverInterface):
             vm_nic.networkData.append(VmDetailsProperty("IP", instance_nic.data.private_ip))
             vm_nic.networkData.append(VmDetailsProperty("Public IP", instance_nic.data.public_ip))
             vm_nic.networkData.append(VmDetailsProperty("MAC Address", instance_nic.data.mac_address))
-            vm_nic.networkData.append(VmDetailsProperty("VLAN Name",
-                                                        "Default Subnet" if "Default" in deployment_service_name else "Custom Subnet"))
+            vm_nic.networkData.append(VmDetailsProperty("VLAN Name", vnic.vlan_tag))
             vm_network_data.append(vm_nic)
         return VmDetailsData(vm_instance_data, vm_network_data, vm_name)
+
+    def console(self, context, ports, connection_type, client_os):
+        """Generates a command for a console access to an instance"""
+        win_ssh_link = "Start-Job {{ Echo N | plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
+                       "-N -ssh -P 443 -l {console_conn_id} -L {port1}:{instance_id}:{port2} {console_conn_endpoint} " \
+                       "}}; sleep 5; plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
+                       "-P {port1} localhost -l {instance_id}"
+
+        win_vnc_link = "Start-Job {{ Echo N | plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
+                       "-N -ssh -P 443 -l {console_conn_id} -L {port1}:{instance_id}:{port1} {console_conn_endpoint} " \
+                       "}}; sleep 5; plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
+                       "-N -L {port2}:localhost:{port2} -P {port1} localhost -l {instance_id}"
+        resource_config = OCIShellDriverResource.create_from_context(context)
+        api = CloudShellSessionContext(context).get_api()
+        self._connect_oracle_session(resource_config)
+        compute_client_ops = oci.core.ComputeClientCompositeOperations(self.compute_client)
+
+        with LoggingSessionContext(context) as logger:
+            instance_id = self._get_connected_instance_id(context)
+            keys_path = resource_config.keypairs_path
+            if not keys_path.endswith("\\"):
+                keys_path += "\\"
+            ssh_pub_key_path = "{}{}.pub".format(keys_path, resource_config.default_keypair)
+            ssh_pub_key = str(open(ssh_pub_key_path).read())
+            create_console = oci.core.models.CreateInstanceConsoleConnectionDetails()
+            create_console.freeform_tags = self._get_tags(context)
+            create_console.instance_id = instance_id
+            create_console.public_key = ssh_pub_key
+            instance_console_ids = pagination.list_call_get_all_results(
+                self.compute_client.list_instance_console_connections,
+                resource_config.compartment_ocid,
+                instance_id=instance_id
+            )
+            result = None
+            instance_console_id = next((console_instance for console_instance in instance_console_ids.data), None)
+            if instance_console_id:
+                result = self.compute_client.get_instance_console_connection(instance_console_id.id)
+            if not result:
+                result = compute_client_ops.create_instance_console_connection_and_wait_for_state(
+                    create_console,
+                    wait_for_states=[oci.core.models.InstanceConsoleConnection.LIFECYCLE_STATE_ACTIVE])
+            if "win" in client_os.lower():
+                data_dict = {
+                    "console_conn_id": result.data.id,
+                    "console_conn_endpoint": "instance-console.{}.oraclecloud.com".format(resource_config.region),
+                    "port1": 5905,
+                    "port2": 5900,
+                    "instance_id": instance_id
+                }
+                pattern = r"^.*{}@(?P<console_conn_endpoint>\S+)'".format(result.data.id)
+                endpoint_string_match = re.search(pattern, result.data.vnc_connection_string, re.IGNORECASE)
+                if endpoint_string_match:
+                    data_dict.update(endpoint_string_match.groupdict())
+                if "vnc" in connection_type.lower():
+                    response = win_vnc_link.format(**data_dict)
+                else:
+                    data_dict["port1"] = 22000
+                    data_dict["port2"] = 22
+                    response = win_ssh_link.format(**data_dict)
+            else:
+                response = result.data.connection_string
+                if "vnc" in connection_type.lower():
+                    response = result.data.vnc_connection_string
+
+            api.WriteMessageToReservationOutput(context.remote_reservation.reservation_id,
+                                                "Console link is: {}".format(response))
+
+    def _remote_save_snapshot(self, context, ports, snapshot_name):
+        resource_config = OCIShellDriverResource.create_from_context(context)
+        self._connect_oracle_session(resource_config)
+
+        with LoggingSessionContext(context) as logger:
+            instance_id = self._get_connected_instance_id(context)
+            instance = self.compute_client.get_instance(instance_id)
+            boot_volumes = self.compute_client.list_boot_volume_attachments(instance.data.availability_domain,
+                                                                            instance.data.compartment_id,
+                                                                            instance_id=instance_id)
+
+            tags = self._get_tags(context)
+            tags["InstanceId"] = instance_id
+            for instance_volume in boot_volumes.data:
+                if instance_volume.instance_id == instance_id:
+                    backup_details = oci.core.models.CreateBootVolumeBackupDetails(
+                        boot_volume_id=instance_volume.boot_volume_id,
+                        display_name=snapshot_name,
+                        freeform_tags=tags,
+                        type="FULL"
+                    )
+                    self.storage_client_ops.create_boot_volume_backup_and_wait_for_state(
+                        backup_details,
+                        [oci.core.models.BootVolumeBackup.LIFECYCLE_STATE_AVAILABLE])
+            return "Backup {} created successfully".format(snapshot_name)
+
+    def _remote_get_snapshots(self, context, ports):
+        resource_config = OCIShellDriverResource.create_from_context(context)
+        self._connect_oracle_session(resource_config)
+
+        with LoggingSessionContext(context) as logger:
+            instance_id = self._get_connected_instance_id(context)
+            instance = self.compute_client.get_instance(instance_id)
+            volume_backups = self.storage_client.list_boot_volume_backups(instance.data.compartment_id)
+            return [backup.display_name for backup in volume_backups.data if
+                    backup.freeform_tags["InstanceId"] == instance_id]
+
+    def _remote_restore_snapshot(self, context, ports, snapshot_name):
+        # ToDo for future implementation
+        resource_config = OCIShellDriverResource.create_from_context(context)
+        self._connect_oracle_session(resource_config)
+
+        with LoggingSessionContext(context) as logger:
+            self.PowerOff(context, ports)
+
+
 
     def PrepareSandboxInfra(self, context, request, cancellation_context):
         """
@@ -595,6 +723,7 @@ class OCIShellDriver(ResourceDriverInterface):
                 resource_config.compartment_ocid
             )
             availability_domain = list_availability_domains_response.data[0].name
+            tags_to_add = self._get_tags(context)
 
             if vcn_cidr:
                 prepare_network_result = PrepareCloudInfraResult(vcn_action_id)
@@ -605,11 +734,37 @@ class OCIShellDriver(ResourceDriverInterface):
                         oci.core.models.CreateVcnDetails(
                             cidr_block=vcn_cidr,
                             display_name=context.reservation.reservation_id,
+                            freeform_tags=tags_to_add,
                             compartment_id=resource_config.compartment_ocid
                         ),
                         [oci.core.models.Vcn.LIFECYCLE_STATE_AVAILABLE]
                     )
                     vcn = new_vcn.data
+                    default_route_table = self.network_client.get_route_table(vcn.default_route_table_id)
+                    route_rules = default_route_table.data.route_rules
+                    inet_gw = virtual_network_client.create_internet_gateway_and_wait_for_state(
+                        oci.core.models.CreateInternetGatewayDetails(
+                            vcn_id=vcn.id,
+                            display_name=context.reservation.reservation_id,
+                            freeform_tags=tags_to_add,
+                            is_enabled=True,
+                            compartment_id=resource_config.compartment_ocid),
+                        [oci.core.models.InternetGateway.LIFECYCLE_STATE_AVAILABLE]
+                    )
+                    default_static_rule = oci.core.models.RouteRule(
+                        cidr_block=None,
+                        destination=self.STATIC_CIDR,
+                        destination_type='CIDR_BLOCK',
+                        network_entity_id=inet_gw.data.id
+                    )
+                    route_rules.append(default_static_rule)
+                    update_route_table_details = oci.core.models.UpdateRouteTableDetails(route_rules=route_rules,
+                                                                                         freeform_tags=tags_to_add)
+                    virtual_network_client.update_route_table_and_wait_for_state(
+                        vcn.default_route_table_id,
+                        update_route_table_details,
+                        wait_for_states=[oci.core.models.RouteTable.LIFECYCLE_STATE_AVAILABLE]
+                    )
                 vcn_ocid = vcn.id
                 prepare_network_result.securityGroupId = vcn.default_security_list_id
                 if not vcn_ocid:
@@ -624,6 +779,7 @@ class OCIShellDriver(ResourceDriverInterface):
                             oci.core.models.CreateSubnetDetails(
                                 compartment_id=resource_config.compartment_ocid,
                                 availability_domain=availability_domain,
+                                freeform_tags=tags_to_add,
                                 display_name=action_id,
                                 vcn_id=vcn_ocid,
                                 cidr_block=subnet_dict.get(action_id)
@@ -647,7 +803,7 @@ class OCIShellDriver(ResourceDriverInterface):
             prepare_network_result.networkId = vcn_ocid
 
             # Set Keypair ToDo generate ssh keys
-            keypair_path = "{}\\{}.ppk".format(resource_config.keypairs_path, resource_config.default_keypair)
+            keypair_path = "{}\\{}".format(resource_config.keypairs_path, resource_config.default_keypair)
             # api.WriteMessageToReservationOutput(context.reservation.reservation_id, 'Reading Sandbox Keypair {0}...')
             create_key_result = CreateKeysActionResult(actionId=keys_action_id, infoMessage='',
                                                        accessKey=str(open(keypair_path).read()))
@@ -668,35 +824,51 @@ class OCIShellDriver(ResourceDriverInterface):
         :return: 
         """
         api = CloudShellSessionContext(context).get_api()
-        api.WriteMessageToReservationOutput(context.reservation.reservation_id, 'Cleanup Request JSON: ' + request)
+        # api.WriteMessageToReservationOutput(context.reservation.reservation_id, 'Cleanup Request JSON: ' + request)
         json_request = json.loads(request)
         resource_config = OCIShellDriverResource.create_from_context(context)
         self._connect_oracle_session(resource_config)
-        virt_net_client = VirtualNetworkClientCompositeOperations(self.network_client)
-
         cleanup_action_id = next(action["actionId"] for action in json_request["driverRequest"]["actions"] if
                                  action["type"] == "cleanupNetwork")
 
         vcn = self._get_unique_vcn_by_name(resource_config.compartment_ocid, context.reservation.reservation_id)
-        subnets = self._get_unique_subnet_by_cidr(resource_config.compartment_ocid, vcn_id=vcn.id)
-        service_gateways = self._get_service_gateways(resource_config.compartment_ocid, vcn_id=vcn.id)
-        internet_gateways = self._get_inet_gateways(resource_config.compartment_ocid, vcn_id=vcn.id)
-        for subnet in subnets:
-            virt_net_client.delete_subnet_and_wait_for_state(subnet.id,
-                                                             [oci.core.models.Subnet.LIFECYCLE_STATE_TERMINATED])
-        for service_gw in service_gateways:
-            virt_net_client.delete_service_gateway_and_wait_for_state(
-                service_gw.id,
-                [oci.core.models.ServiceGateway.LIFECYCLE_STATE_TERMINATED]
+        if vcn:
+            subnets = self._get_unique_subnet_by_cidr(resource_config.compartment_ocid, vcn_id=vcn.id) or []
+            service_gateways = self._get_service_gateways(resource_config.compartment_ocid, vcn_id=vcn.id) or []
+            internet_gateways = self._get_inet_gateways(resource_config.compartment_ocid, vcn_id=vcn.id) or []
+            for subnet in subnets:
+                self.network_client_ops.delete_subnet_and_wait_for_state(
+                    subnet.id,
+                    [oci.core.models.Subnet.LIFECYCLE_STATE_TERMINATED])
+            default_route_table = self.network_client.get_route_table(vcn.default_route_table_id)
+            route_rules = default_route_table.data.route_rules
+            update_route_table_details = oci.core.models.UpdateRouteTableDetails(route_rules=[])
+            self.network_client_ops.update_route_table_and_wait_for_state(
+                vcn.default_route_table_id,
+                update_route_table_details,
+                wait_for_states=[oci.core.models.RouteTable.LIFECYCLE_STATE_AVAILABLE]
             )
-        for internet_gw in internet_gateways:
-            virt_net_client.delete_internet_gateway_and_wait_for_state(
+            for service_gw in service_gateways:
+                self.network_client_ops.delete_service_gateway_and_wait_for_state(
+                    service_gw.id,
+                    [oci.core.models.ServiceGateway.LIFECYCLE_STATE_TERMINATED]
+                )
+            security_lists = self.network_client.list_security_lists(resource_config.compartment_ocid, vcn.id)
+            for list in security_lists.data:
+                if list.time_created == vcn.time_created:  # and "default" in list.display_name.lower():
+                    continue
+                self.network_client_ops.delete_security_list_and_wait_for_state(
+                    list.id,
+                    [oci.core.models.SecurityList.LIFECYCLE_STATE_TERMINATED])
+            for internet_gw in internet_gateways:
+                self.network_client_ops.delete_internet_gateway_and_wait_for_state(
                     internet_gw.id,
                     wait_for_states=[oci.core.models.InternetGateway.LIFECYCLE_STATE_TERMINATED]
                 )
 
-        virt_net_client.delete_vcn_and_wait_for_state(vcn.id,
-                                                      [oci.core.models.Vcn.LIFECYCLE_STATE_TERMINATED])
+            self.network_client_ops.delete_vcn_and_wait_for_state(
+                vcn.id,
+                [oci.core.models.Vcn.LIFECYCLE_STATE_TERMINATED])
 
         cleanup_result = ActionResultBase("cleanupNetwork", cleanup_action_id)
 
@@ -782,3 +954,68 @@ class OCIShellDriver(ResourceDriverInterface):
         )
 
         return result.data
+
+    def _get_tags(self, context):
+        if hasattr(context, "remote_reservation"):
+            reservation = context.remote_reservation
+        else:
+            reservation = context.reservation
+        return {
+            "CreatedBy": "Cloudshell",
+            "ReservationId": reservation.reservation_id,
+            "Owner": reservation.owner_user,
+            "Domain": reservation.domain,
+            "Blueprint": reservation.environment_name
+        }
+
+    def _add_security_list(self, vcn_id, security_list_name, compartment_ocid, tags, inbound_ports):
+        inbound_ports_map = {
+            "tcp": oci.core.models.TcpOptions,
+            "icmp": oci.core.models.IcmpOptions,
+            "udp": oci.core.models.UdpOptions
+        }
+        inbound_ports_protocol_map = {"icmp": "1", "tcp": "6", "udp": "17", "icmpv6": "58"}
+        security_list_ingress_rules = []
+        inbound_ports_list = inbound_ports.split(";")
+        for port in inbound_ports_list:
+            protocol = "tcp"
+            if ":" in port:
+                port_data = port.split(":")
+                protocol = port_data[1]
+                ports = port_data[0].replace(" ", "")
+            else:
+                ports = port
+            rule_type = inbound_ports_map.get(protocol)
+            if rule_type:
+                rules_to_add_list = ports.split(",")
+                for rule_ports in rules_to_add_list:
+                    try:
+                        if "-" in rule_ports:
+                            rule_ports_list = map(int, rule_ports.split("-"))
+                            min_port = min(rule_ports_list)
+                            max_port = max(rules_to_add_list)
+                            port_range = oci.core.models.PortRange(min=min_port, max_port=max_port)
+                        else:
+                            port_range = oci.core.models.PortRange(min=int(rule_ports), max=int(rule_ports))
+                    except:
+                        continue
+                    rule_parameters = {
+                        "protocol": inbound_ports_protocol_map.get(protocol),
+                        "source": self.STATIC_CIDR,
+                        "{}_options".format(protocol): rule_type(destination_port_range=port_range)
+                    }
+                    security_list_ingress_rules.append(oci.core.models.IngressSecurityRule(**rule_parameters))
+
+        if security_list_ingress_rules:
+            return self.network_client_ops.create_security_list_and_wait_for_state(
+                oci.core.models.CreateSecurityListDetails(
+                    vcn_id=vcn_id,
+                    display_name=security_list_name,
+                    freeform_tags=tags,
+                    compartment_id=compartment_ocid,
+                    ingress_security_rules=security_list_ingress_rules,
+                    egress_security_rules=[oci.core.models.EgressSecurityRule(destination=self.STATIC_CIDR,
+                                                                              protocol="all")]
+                ),
+                [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE]
+            )

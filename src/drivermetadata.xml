@@ -1,25 +1,65 @@
-<Driver Description="this driver manage all the commands that runs at the vcenter context" MainClass="driver.OCIShellDriver" Name="OCI Shell Driver" Version="1.0">
-  <Layout>
-    <Category Name="Deployment">
-      <Command Description="" DisplayName="Deploy" EnableCancellation="true" Name="Deploy" Tags="allow_unreserved" />
+<Driver Description="this driver manage all the commands that runs at the vcenter context"
+        MainClass="driver.OCIShellDriver" Name="OCI Shell Driver" Version="1.0">
+    <Layout>
+        <Category Name="Deployment">
+            <Command Description="" DisplayName="Deploy" EnableCancellation="true" Name="Deploy"
+                     Tags="allow_unreserved"/>
+        </Category>
+        <Category Name="Connectivity">
+            <Command Description="" DisplayName="Refresh IP" EnableCancellation="true" Name="remote_refresh_ip"
+                     Tags="remote_connectivity,allow_shared"/>
+            <Command Description="" DisplayName="Apply Connectivity Changes" Name="ApplyConnectivityChanges"
+                     Tags="allow_unreserved"/>
+            <Command Description="" DisplayName="Disconnect All" Name="disconnect_all" Tags="allow_unreserved"/>
+            <Command Description="" DisplayName="Disconnect" Name="disconnect" Tags="allow_unreserved"/>
+            <Command Description="" DisplayName="Prepare Connectivity" EnableCancellation="true"
+                     Name="PrepareSandboxInfra" Tags="allow_unreserved"/>
+            <Command Description="" DisplayName="Cleanup Connectivity" EnableCancellation="true"
+                     Name="CleanupSandboxInfra" Tags="allow_unreserved"/>
+        </Category>
+        <Category Name="Hidden Commands">
+            <Command Description="" DisplayName="Power Cycle" Name="PowerCycle" Tags="power"/>
+            <Command Description="" DisplayName="Delete VM Only" Name="DeleteInstance"
+                     Tags="remote_app_management,allow_shared"/>
+            <Command Description="" DisplayName="Get VM Uuid" Name="get_vm_uuid" Tags="allow_shared"/>
+            <Command Description="" DisplayName="Get VmDetails" EnableCancellation="true" Name="GetVmDetails"
+                     Tags="allow_unreserved"/>
+        </Category>
+        <Category Name="Power">
+            <Command Description="" DisplayName="Power On" Name="PowerOn" Tags="power"/>
+            <Command Description="" DisplayName="Power Off" Name="PowerOff" Tags="power"/>
+        </Category>
+        <Category Name="Snapshot">
+            <Command Description="" DisplayName="Save Snapshot" Name="remote_save_snapshot"
+                     Tags="remote_connectivity,allow_unreserved">
+                <Parameters>
+                    <Parameter DefaultValue="" Description="Please enter the VM snapshot name, for example Snapshot1"
+                               DisplayName="Snapshot Name" Mandatory="True" Name="snapshot_name" Type="String"/>
+                </Parameters>
+            </Command>
+            <Command Description="" DisplayName="Restore Snapshot" Name="remote_restore_snapshot"
+                     Tags="remote_connectivity,allow_unreserved">
+                <Parameters>
+                    <Parameter DefaultValue=""
+                               Description="Please enter the snapshot name."
+                               DisplayName="Snapshot Name" Mandatory="True" Name="snapshot_name" Type="String"/>
+                </Parameters>
+            </Command>
+            <Command Description="" DisplayName="Get Snapshots" Name="remote_get_snapshots"
+                     Tags="remote_connectivity,allow_unreserved"/>
+        </Category>
+        <Category Name="Console">
+        <Command Description="Generates command to access the remote vm console" DisplayName="Console" Name="console"
+                 Tags="remote_connectivity,allow_unreserved">
+            <Parameters>
+                <Parameter DefaultValue="ssh"
+                           Description="Type of console connection, possible values: ssh or vnc"
+                           DisplayName="Connection Type" Mandatory="True" Name="connection_type" Type="String"/>
+                <Parameter DefaultValue="linux"
+                           Description="Client OS type, possible values: windows or linux"
+                           DisplayName="Client OS" Mandatory="True" Name="client_os" Type="String"/>
+            </Parameters>
+        </Command>
     </Category>
-    <Category Name="Connectivity">
-      <Command Description="" DisplayName="Refresh IP" EnableCancellation="true" Name="remote_refresh_ip" Tags="remote_connectivity,allow_shared" />
-      <Command Description="" DisplayName="Apply Connectivity Changes" Name="ApplyConnectivityChanges" Tags="allow_unreserved" />
-      <Command Description="" DisplayName="Disconnect All" Name="disconnect_all" Tags="allow_unreserved" />
-      <Command Description="" DisplayName="Disconnect" Name="disconnect" Tags="allow_unreserved" />
-      <Command Description="" DisplayName="Prepare Connectivity" EnableCancellation="true" Name="PrepareSandboxInfra" Tags="allow_unreserved" />
-      <Command Description="" DisplayName="Cleanup Connectivity" EnableCancellation="true" Name="CleanupSandboxInfra" Tags="allow_unreserved" />
-    </Category>
-    <Category Name="Hidden Commands">
-      <Command Description="" DisplayName="Power Cycle" Name="PowerCycle" Tags="power" />
-      <Command Description="" DisplayName="Delete VM Only" Name="DeleteInstance" Tags="remote_app_management,allow_shared" />
-      <Command Description="" DisplayName="Get VM Uuid" Name="get_vm_uuid" Tags="allow_shared" />
-      <Command Description="" DisplayName="Get VmDetails" EnableCancellation="true" Name="GetVmDetails" Tags="allow_unreserved" />
-    </Category>
-    <Category Name="Power">
-      <Command Description="" DisplayName="Power On" Name="PowerOn" Tags="power" />
-      <Command Description="" DisplayName="Power Off" Name="PowerOff" Tags="power" />
-    </Category>
-  </Layout>
+    </Layout>
 </Driver>
