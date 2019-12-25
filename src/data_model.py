@@ -1,81 +1,106 @@
-from cloudshell.shell.core.driver_context import ResourceCommandContext, AutoLoadDetails, AutoLoadAttribute, \
-    AutoLoadResource
-from collections import defaultdict
+from cloudshell.shell.core.session.cloudshell_session import CloudShellSessionContext
+from cloudshell.shell.core.session.logging_session import LoggingSessionContext
+
+from quali_api_helper import QualiAPIHelper
 
 
 class OCIShellDriverResource(object):
-    def __init__(self, name):
+    def __init__(self, name, context):
         """
         
         """
         self.attributes = {}
         self.resources = {}
+        self._context = context
         self._cloudshell_model_name = 'OCI Shell'
         self._name = name
-
-    def add_sub_resource(self, relative_path, sub_resource):
-        self.resources[relative_path] = sub_resource
 
     @classmethod
     def create_from_context(cls, context):
         """
         Creates an instance of NXOS by given context
-        :param context: cloudshell.shell.core.driver_context.ResourceCommandContext
-        :type context: cloudshell.shell.core.driver_context.ResourceCommandContext
+        :param context: Command context
+        :type context: ResourceCommandContext, ResourceRemoteCommandContext
         :return:
         :rtype OCIShellDriverResource
         """
-        result = OCIShellDriverResource(name=context.resource.name)
+        result = OCIShellDriverResource(name=context.resource.name, context=context)
         for attr in context.resource.attributes:
             result.attributes[attr] = context.resource.attributes[attr]
         return result
 
-    def create_autoload_details(self, relative_path=''):
-        """
-        :param relative_path:
-        :type relative_path: str
-        :return
-        """
-        resources = [AutoLoadResource(model=self.resources[r].cloudshell_model_name,
-                                      name=self.resources[r].name,
-                                      relative_address=self._get_relative_path(r, relative_path))
-                     for r in self.resources]
-        attributes = [AutoLoadAttribute(relative_path, a, self.attributes[a]) for a in self.attributes]
-        autoload_details = AutoLoadDetails(resources, attributes)
-        for r in self.resources:
-            curr_path = relative_path + '/' + r if relative_path else r
-            curr_auto_load_details = self.resources[r].create_autoload_details(curr_path)
-            autoload_details = self._merge_autoload_details(autoload_details, curr_auto_load_details)
-        return autoload_details
+    @property
+    def api(self):
+        return CloudShellSessionContext(self._context).get_api()
 
-    def _get_relative_path(self, child_path, parent_path):
-        """
-        Combines relative path
-        :param child_path: Path of a model within it parent model, i.e 1
-        :type child_path: str
-        :param parent_path: Full path of parent model, i.e 1/1. Might be empty for root model
-        :type parent_path: str
-        :return: Combined path
-        :rtype str
-        """
-        return parent_path + '/' + child_path if parent_path else child_path
+    @property
+    def quali_api_helper(self):
+        if hasattr(self._context, 'reservation'):
+            domain = self._context.reservation.domain
+        elif hasattr(self._context, 'remote_reservation') and self._context.remote_reservation:
+            domain = self._context.remote_reservation.domain
+        else:
+            domain = "Global"
+        address = self._context.connectivity.server_address
+        token = self._context.connectivity.admin_auth_token
+        use_https = self._context.connectivity.cloudshell_api_scheme.lower() == "https"
+        instance = QualiAPIHelper(address, token=token, domain=domain, use_https=use_https)
+        # if token:
+        #     instance = QualiAPIHelper(address, token=token, domain=domain, use_https=use_https)
+        # else:
+        #     instance = QualiAPIHelper(address, username='admin', password='admin', domain=domain)
+        return instance
 
-    @staticmethod
-    def _merge_autoload_details(autoload_details1, autoload_details2):
-        """
-        Merges two instances of AutoLoadDetails into the first one
-        :param autoload_details1:
-        :type autoload_details1: AutoLoadDetails
-        :param autoload_details2:
-        :type autoload_details2: AutoLoadDetails
+    @property
+    def reservation_id(self):
+        if hasattr(self._context, "remote_reservation"):
+            reservation = self._context.remote_reservation
+        else:
+            reservation = self._context.reservation
+        return reservation.reservation_id
+
+    @property
+    def tags(self):
+        if hasattr(self._context, "remote_reservation"):
+            reservation = self._context.remote_reservation
+        else:
+            reservation = self._context.reservation
+        return {
+            "CreatedBy": "Cloudshell",
+            "ReservationId": reservation.reservation_id,
+            "Owner": reservation.owner_user,
+            "Domain": reservation.domain,
+            "Blueprint": reservation.environment_name
+        }
+
+    def get_logger(self):
+        return LoggingSessionContext(self._context)
+
+    @property
+    def oci_config(self):
+        return {
+            "user": self.api_user_id,
+            "key_file": self.api_key_file_path,
+            "pass_phrase": self.api_key_passphrase,
+            "fingerprint": self.api_key_file_fingerprint,
+            "tenancy": self.tenant_id,
+            "region": self.region
+        }
+
+    @property
+    def remote_instance_id(self):
+        """ Retrieve UID of the VM the resource represents
         :return:
-        :rtype AutoLoadDetails
         """
-        for attribute in autoload_details2.attributes:
-            autoload_details1.attributes.append(attribute)
-        for resource in autoload_details2.resources:
-            autoload_details1.resources.append(resource)
-        return autoload_details1
+
+        endpoint = self._context.remote_endpoints[0].fullname.split('/')[0]
+        parent_connected_resource = self.api.GetResourceDetails(endpoint)
+        try:
+            instance_id = [attribute.Value for attribute in parent_connected_resource.ResourceAttributes if
+                           attribute.Name == 'VM_UUID'][0]
+        except Exception:
+            instance_id = parent_connected_resource.VmDetails.UID
+        return instance_id
 
     @property
     def api_user_id(self):
@@ -176,12 +201,13 @@ class OCIShellDriverResource(object):
         :rtype: str
         """
         return self.attributes[
-            'OCI Shell.Default Availability Domain'] if 'OCI Shell.Default Availability Domain' in self.attributes else None
+            'OCI Shell.Default Availability Domain'] \
+            if 'OCI Shell.Default Availability Domain' in self.attributes else None
 
     @default_availability_domain.setter
     def default_availability_domain(self, value):
         """
-        Full name of the Default Availability Domain for VM deployments (example "rJhM\:EU-FRANKFURT-1-AD-1")
+        Full name of the Default Availability Domain for VM deployments (example "rJhM:EU-FRANKFURT-1-AD-1")
         :type value: str
         """
         self.attributes['OCI Shell.Default Availability Domain'] = value
@@ -272,7 +298,8 @@ class OCIShellDriverResource(object):
     @networks_in_use.setter
     def networks_in_use(self, value=''):
         """
-        Reserved network ranges to be excluded when allocated sandbox networks (for cloud providers with L3 networking). The syntax is a comma separated CIDR list. For example "10.0.0.0/24, 10.1.0.0/26"
+        Reserved network ranges to be excluded when allocated sandbox networks (for cloud providers with L3 networking).
+        The syntax is a comma separated CIDR list. For example "10.0.0.0/24, 10.1.0.0/26"
         :type value: str
         """
         self.attributes['OCI Shell.Networks in use'] = value
