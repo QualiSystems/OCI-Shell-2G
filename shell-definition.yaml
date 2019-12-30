@@ -99,6 +99,10 @@ node_types:
             type: string
             default: 
             description: Path to Local Keypair repository
+          Networks in use:
+            type: string
+            default:
+            description: CIDRs to skip during Sandbox reservation
           enable_auto_discovery:
             type: boolean
             default: true
