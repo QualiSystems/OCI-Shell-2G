@@ -58,10 +58,15 @@ class OciComputeOps(object):
         new_inst_details.metadata = {'ssh_authorized_keys': ssh_pub_key}
 
         # Start the VM
+        retry_strategy = oci.retry.RetryStrategyBuilder().add_max_attempts(10) \
+                                               .add_total_elapsed_time(600) \
+                                               .add_service_error_check() \
+                                               .get_retry_strategy()
+
         launch_instance_response = self.compute_client_ops.launch_instance_and_wait_for_state(
             new_inst_details,
             wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING],
-            operation_kwargs={"retry_strategy": oci.retry.DEFAULT_RETRY_STRATEGY})
+            operation_kwargs={"retry_strategy": retry_strategy})
         if launch_instance_response.data:
             return launch_instance_response.data
         else:
