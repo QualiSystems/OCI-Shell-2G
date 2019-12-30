@@ -49,15 +49,19 @@
                      Tags="remote_connectivity,allow_unreserved"/>
         </Category>
         <Category Name="Console">
-        <Command Description="Generates command to access the remote vm console" DisplayName="Console" Name="console"
+        <Command Description="Allows console connection and generates the command to access it"
+                 DisplayName="Console"
+                 Name="console"
                  Tags="remote_connectivity,allow_unreserved">
             <Parameters>
-                <Parameter DefaultValue="ssh"
-                           Description="Type of console connection, possible values: ssh or vnc"
-                           DisplayName="Connection Type" Mandatory="True" Name="connection_type" Type="String"/>
-                <Parameter DefaultValue="linux"
+                <Parameter DefaultValue="SSH"
+                           Description="Type of console connection"
+                           AllowedValues="SSH,VNC"
+                           DisplayName="Connection Type" Mandatory="True" Name="connection_type" Type="Lookup"/>
+                <Parameter DefaultValue="Linux"
+                           AllowedValues="Linux,Windows"
                            Description="Client OS type, possible values: windows or linux"
-                           DisplayName="Client OS" Mandatory="True" Name="client_os" Type="String"/>
+                           DisplayName="Client OS" Mandatory="True" Name="client_os" Type="Lookup"/>
             </Parameters>
         </Command>
     </Category>

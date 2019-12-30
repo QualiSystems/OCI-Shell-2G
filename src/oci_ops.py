@@ -34,9 +34,10 @@ class OciOps(object):
             if vnic and vnic.data.is_primary:
                 return vnic.data
 
-    def attach_secondary_vnics(self, name, subnet_id, instance_id, is_public):
+    def attach_secondary_vnics(self, name, subnet_id, instance_id, is_public, src_dst_check):
         secondary_vnic_details = oci.core.models.CreateVnicDetails(assign_public_ip=is_public,
                                                                    display_name=name,
+                                                                   skip_source_dest_check=src_dst_check,
                                                                    subnet_id=subnet_id)
         secondary_vnic_attach_details = oci.core.models.AttachVnicDetails(create_vnic_details=secondary_vnic_details,
                                                                           display_name=name,
@@ -95,7 +96,7 @@ class OciOps(object):
         create_bucket_details.compartment_id = self.resource_config.compartment_ocid
         create_bucket_details.freeform_tags = tags
         create_bucket_details.public_access_type = "NoPublicAccess"
-        return self.object_storage_client.create_bucket(namespace, create_bucket_details).data
+        return self.object_storage_client.create_bucket(namespace, create_bucket_details)
 
     def generate_rsa_key_pair(self):
         key = rsa.generate_private_key(
@@ -119,8 +120,7 @@ class OciOps(object):
         try:
             bucket = self.object_storage_client.get_bucket(namespace, self.BUCKET_NAME).data.name
         except oci.exceptions.ServiceError:
-            bucket = self.create_ssh_keys_storage()
-        # private_key, public_key = self.generate_rsa_key_pair()
+            bucket = self.create_ssh_keys_storage().data.name
         self.object_storage_client.put_object(namespace,
                                               bucket,
                                               self.resource_config.reservation_id,

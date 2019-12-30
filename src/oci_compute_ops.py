@@ -17,6 +17,7 @@ class OciComputeOps(object):
         self.resource_config = resource_config
         self.compute_client = oci.core.ComputeClient(config)
         self.compute_client_ops = oci.core.ComputeClientCompositeOperations(self.compute_client)
+        pass
 
     def change_instance_state(self, instance_id, new_state):
         self.compute_client_ops.instance_action_and_wait_for_state(
@@ -28,10 +29,17 @@ class OciComputeOps(object):
     def launch_instance(self, availability_domain,
                         subnet_id,
                         app_name,
-                        public_ip,
-                        vm_shape,
-                        image_id,
+                        vm_details,
                         ssh_pub_key):
+
+        compatible_shapes = pagination.list_call_get_all_results(self.compute_client.list_shapes,
+                                                                 compartment_id=self.resource_config.compartment_ocid,
+                                                                 availability_domain=availability_domain,
+                                                                 image_id=vm_details.image_id)
+        is_shape_compatible = next((x.shape for x in compatible_shapes.data if x.shape == vm_details.vm_shape), None)
+        if not is_shape_compatible:
+            raise Exception("Incompatible shape chosen for deployment on App {} "
+                            "Please check the available shapes for this image on OCI".format(app_name))
 
         new_inst_details = oci.core.models.LaunchInstanceDetails()
         # Create LaunchInstanceDetails
@@ -41,11 +49,12 @@ class OciComputeOps(object):
         new_inst_details.display_name = app_name
         new_inst_details.freeform_tags = self.resource_config.tags
         new_inst_details.create_vnic_details = oci.core.models.CreateVnicDetails(
-            assign_public_ip=public_ip,
+            assign_public_ip=vm_details.public_ip,
             display_name=self.resource_config.reservation_id,
+            skip_source_dest_check=vm_details.skip_src_dst_check,
             subnet_id=subnet_id)
-        new_inst_details.shape = vm_shape
-        new_inst_details.image_id = image_id
+        new_inst_details.shape = vm_details.vm_shape
+        new_inst_details.image_id = vm_details.image_id
         new_inst_details.metadata = {'ssh_authorized_keys': ssh_pub_key}
 
         # Start the VM

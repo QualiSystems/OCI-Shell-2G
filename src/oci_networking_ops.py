@@ -87,25 +87,28 @@ class OciNetworkOps(object):
         return result.data
 
     def add_security_list(self, vcn_id, security_list_name, inbound_ports):
+        # 31.154.25.138
+        # 130.61.210.23
         inbound_ports_map = {
             "tcp": oci.core.models.TcpOptions,
             "icmp": oci.core.models.IcmpOptions,
-            "udp": oci.core.models.UdpOptions
+            "udp": oci.core.models.UdpOptions,
+            "all": ""
         }
         inbound_ports_protocol_map = {"icmp": "1", "tcp": "6", "udp": "17", "icmpv6": "58"}
         security_list_ingress_rules = []
-        inbound_ports_list = inbound_ports.split(";")
-        for port in inbound_ports_list:
-            protocol = "tcp"
-            if ":" in port:
-                port_data = port.split(":")
-                protocol = port_data[1]
-                ports = port_data[0].replace(" ", "")
-            else:
-                ports = port
-            rule_type = inbound_ports_map.get(protocol)
-            if rule_type:
-                rules_to_add_list = ports.split(",")
+        # inbound_ports_list = inbound_ports.split(";")
+        for port in inbound_ports:
+            rule_type = inbound_ports_map.get(port.protocol)
+            if not rule_type:
+                continue
+
+            rule_parameters = {
+                        "protocol": inbound_ports_protocol_map.get(port.protocol),
+                        "source": port.cidr
+                    }
+            if "all" not in port.protocol:
+                rules_to_add_list = port.ports.split(",")
                 for rule_ports in rules_to_add_list:
                     try:
                         if "-" in rule_ports:
@@ -117,11 +120,7 @@ class OciNetworkOps(object):
                             port_range = oci.core.models.PortRange(min=int(rule_ports), max=int(rule_ports))
                     except ValueError:
                         continue
-                    rule_parameters = {
-                        "protocol": inbound_ports_protocol_map.get(protocol),
-                        "source": self.DEFAULT_STATIC_CIDR,
-                        "{}_options".format(protocol): rule_type(destination_port_range=port_range)
-                    }
+                    rule_parameters["{}_options".format(port.protocol)] = rule_type(destination_port_range=port_range)
                     security_list_ingress_rules.append(oci.core.models.IngressSecurityRule(**rule_parameters))
 
         if security_list_ingress_rules:
@@ -137,6 +136,29 @@ class OciNetworkOps(object):
                 ),
                 [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE]
             )
+
+    def configure_default_security_rule(self):
+        vcn = self.get_vcn()
+        security_list = self.network_client.get_security_list(vcn.default_security_list_id)
+        security_list_update_details = oci.core.models.UpdateSecurityListDetails()
+        security_list_update_details.egress_security_rules = security_list.data.egress_security_rules
+        new_ingress_list = []
+        for rule in security_list.data.ingress_security_rules:
+            if rule.tcp_options and (rule.tcp_options.destination_port_range.max == 22 or
+                                     rule.tcp_options.destination_port_range == 22):
+                continue
+            new_ingress_list.append(rule)
+        # adding rule to allow internal subnet communication
+        new_ingress_list.append(oci.core.models.IngressSecurityRule(source=vcn.cidr_block, protocol="all"))
+        security_list_update_details.ingress_security_rules = new_ingress_list
+        self.update_security_list(security_list.data.id, security_list_update_details)
+
+    def update_security_list(self, security_list_id, update_security_list_details):
+        self.network_client_ops.update_security_list_and_wait_for_state(
+            security_list_id,
+            update_security_list_details,
+            [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE]
+        )
 
     def update_subnet_security_lists(self, subnet, security_list_id):
         new_security_list = subnet.security_list_ids
