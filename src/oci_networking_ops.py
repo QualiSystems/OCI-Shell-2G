@@ -47,7 +47,6 @@ class OciNetworkOps(object):
             vcn_id
         )
 
-        print result
         if not subnet_cidr and result.data:
             return result.data
         for item in result.data:

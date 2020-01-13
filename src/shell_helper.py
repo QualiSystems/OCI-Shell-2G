@@ -3,6 +3,11 @@ import re
 import jsonpickle
 from cloudshell.cp.core.models import VmDetailsProperty, VmDetailsNetworkInterface, VmDetailsData
 
+
+class OciShellError(Exception):
+    pass
+
+
 WIN_SSH_LINK_TEMPLATE = "Start-Job {{ Echo N | plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
                        "-N -ssh -P 443 -l {console_conn_id} -L {port1}:{instance_id}:{port2} {console_conn_endpoint} " \
                        "}}; sleep 5; plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
@@ -48,6 +53,7 @@ def create_vm_details(resource_config, oci_ops, vm_name, deployment_service_name
     instance_volume = oci_ops.get_attached_boot_volume(instance)
 
     vm_instance_data = [
+        VmDetailsProperty("Instance ID", instance.id),
         VmDetailsProperty("Image ID", instance.image_id),
         VmDetailsProperty("VM Shape", instance.shape),
         VmDetailsProperty("Storage Name", instance_volume.id),
@@ -57,7 +63,7 @@ def create_vm_details(resource_config, oci_ops, vm_name, deployment_service_name
     ]
 
     vm_network_data = []
-    vnic_attachments = oci_ops.compute_ops.get_vnic_attachments(instance.compartment_id)
+    vnic_attachments = oci_ops.compute_ops.get_vnic_attachments(instance.id)
     for vnic in vnic_attachments:
         instance_nic = oci_ops.network_ops.network_client.get_vnic(vnic.vnic_id)
 
@@ -66,7 +72,6 @@ def create_vm_details(resource_config, oci_ops, vm_name, deployment_service_name
         vm_nic.networkId = instance_nic.data.subnet_id
         vm_nic.isPrimary = False
         vm_nic.isPredefined = False
-
         # ToDo find a better way to determine if the vnic is primary or not
         if vnic.display_name == resource_config.reservation_id or vnic.display_name is None:
             vm_nic.isPrimary = True
@@ -76,6 +81,7 @@ def create_vm_details(resource_config, oci_ops, vm_name, deployment_service_name
         vm_nic.networkData.append(VmDetailsProperty("Public IP", instance_nic.data.public_ip))
         vm_nic.networkData.append(VmDetailsProperty("MAC Address", instance_nic.data.mac_address))
         vm_nic.networkData.append(VmDetailsProperty("VLAN Name", vnic.vlan_tag))
+        vm_nic.networkData.append(VmDetailsProperty("Skip src/dst check", instance_nic.data.skip_source_dest_check))
         vm_network_data.append(vm_nic)
     return VmDetailsData(vm_instance_data, vm_network_data, vm_name)
 

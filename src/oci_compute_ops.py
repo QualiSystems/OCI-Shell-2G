@@ -1,6 +1,8 @@
 import oci
 from oci import pagination
 
+from shell_helper import OciShellError
+
 
 class OciComputeOps(object):
     INSTANCE_START = "START"
@@ -38,8 +40,8 @@ class OciComputeOps(object):
                                                                  image_id=vm_details.image_id)
         is_shape_compatible = next((x.shape for x in compatible_shapes.data if x.shape == vm_details.vm_shape), None)
         if not is_shape_compatible:
-            raise Exception("Incompatible shape chosen for deployment on App {} "
-                            "Please check the available shapes for this image on OCI".format(app_name))
+            raise OciShellError("Incompatible shape chosen for deployment on App {}. "
+                                "Please check the available shapes for this image on OCI".format(app_name))
 
         new_inst_details = oci.core.models.LaunchInstanceDetails()
         # Create LaunchInstanceDetails
@@ -59,9 +61,9 @@ class OciComputeOps(object):
 
         # Start the VM
         retry_strategy = oci.retry.RetryStrategyBuilder().add_max_attempts(10) \
-                                               .add_total_elapsed_time(600) \
-                                               .add_service_error_check() \
-                                               .get_retry_strategy()
+            .add_total_elapsed_time(600) \
+            .add_service_error_check() \
+            .get_retry_strategy()
 
         launch_instance_response = self.compute_client_ops.launch_instance_and_wait_for_state(
             new_inst_details,
@@ -94,9 +96,11 @@ class OciComputeOps(object):
             instance_update,
             wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING])
 
-    def terminate_instance(self):
+    def terminate_instance(self, instance_id=None):
+        if not instance_id:
+            instance_id = self.resource_config.remote_instance_id
         self.compute_client_ops.terminate_instance_and_wait_for_state(
-            self.resource_config.remote_instance_id,
+            instance_id,
             [oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED]
         )
 
