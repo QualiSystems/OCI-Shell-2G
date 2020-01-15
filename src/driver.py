@@ -176,7 +176,8 @@ class OCIShellDriver(ResourceDriverInterface):
                             message = "Could not add public IP to VNIC in subnet {}, " \
                                       "to {}. Access possible" \
                                       " using private IP only".format(secondary_subnet_name, instance_name)
-                            resource_config.api.WriteMessageToReservationOutput("Warning, {}".format(message))
+                            resource_config.api.WriteMessageToReservationOutput(resource_config.reservation_id,
+                                                                                "Warning, {}".format(message))
                         logger.warning(message)
 
                 interface_json = oci_ops.attach_secondary_vnics(name=vnic_action.actionId,
