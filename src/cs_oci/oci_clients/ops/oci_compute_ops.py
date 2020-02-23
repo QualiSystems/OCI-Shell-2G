@@ -1,7 +1,7 @@
 import oci
 from oci import pagination
 
-from shell_helper import OciShellError
+from cs_oci.helper.shell_helper import OciShellError
 
 
 class OciComputeOps(object):

@@ -43,7 +43,7 @@ def create_win_console_link(instance_id, console_id, region, linux_ssh_link="", 
 def create_vm_details(resource_config, oci_ops, vm_name, deployment_service_name, instance):
     """ Create the VM Details results used for both Deployment and Refresh VM Details
     :param resource_config:
-    :type oci_ops: OciOps
+    :type oci_ops: cs_oci.oci_clients.oci_ops.OciOps
     :param vm_name:
     :param deployment_service_name:
     :param instance:
@@ -70,6 +70,8 @@ def create_vm_details(resource_config, oci_ops, vm_name, deployment_service_name
         vm_nic = VmDetailsNetworkInterface()
         vm_nic.interfaceId = instance_nic.data.id
         vm_nic.networkId = instance_nic.data.subnet_id
+        subnet = oci_ops.network_ops.get_subnet(instance_nic.data.subnet_id)
+
         vm_nic.isPrimary = False
         vm_nic.isPredefined = False
         # ToDo find a better way to determine if the vnic is primary or not
@@ -82,6 +84,9 @@ def create_vm_details(resource_config, oci_ops, vm_name, deployment_service_name
         vm_nic.networkData.append(VmDetailsProperty("MAC Address", instance_nic.data.mac_address))
         vm_nic.networkData.append(VmDetailsProperty("VLAN Name", vnic.vlan_tag))
         vm_nic.networkData.append(VmDetailsProperty("Skip src/dst check", instance_nic.data.skip_source_dest_check))
+        if subnet:
+            vm_nic.networkData.append(VmDetailsProperty("VCN ID", subnet.freeform_tags.get("VCN_ID", "")))
+
         vm_network_data.append(vm_nic)
     return VmDetailsData(vm_instance_data, vm_network_data, vm_name)
 

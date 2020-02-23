@@ -21,6 +21,10 @@
             <Command Description="" DisplayName="Power Cycle" Name="PowerCycle" Tags="power"/>
             <Command Description="" DisplayName="Delete VM Only" Name="DeleteInstance"
                      Tags="remote_app_management,allow_shared"/>
+            <Command Description=""
+                 DisplayName="Set As Routing Gateway"
+                 Name="set_as_routing_gateway"
+                 Tags="remote_connectivity,allow_unreserved"/>
             <Command Description="" DisplayName="Get VM Uuid" Name="get_vm_uuid" Tags="allow_shared"/>
             <Command Description="" DisplayName="Get VmDetails" EnableCancellation="true" Name="GetVmDetails"
                      Tags="allow_unreserved"/>

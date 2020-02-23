@@ -1,6 +1,9 @@
 import oci
 from oci import pagination
 
+from cs_oci.helper.oci_command_executor_with_wait import call_oci_command_with_waiter
+from cs_oci.helper.shell_helper import OciShellError
+
 
 class OciNetworkOps(object):
     DEFAULT_STATIC_CIDR = "0.0.0.0/0"
@@ -15,7 +18,24 @@ class OciNetworkOps(object):
         self.network_client = oci.core.VirtualNetworkClient(config)
         self.network_client_ops = oci.core.VirtualNetworkClientCompositeOperations(self.network_client)
 
-    def get_vcn(self):
+    def allow_local_traffic(self, security_list_id, cidr_block):
+        security_list = self.network_client.get_security_list(security_list_id)
+        security_list_ingress_rules = security_list.data.ingress_security_rules
+        # inbound_ports_list = inbound_ports.split(";")
+
+        security_list_ingress_rules.append(oci.core.models.IngressSecurityRule(protocol="all", source=cidr_block))
+
+        if security_list_ingress_rules:
+            return self.network_client_ops.update_security_list_and_wait_for_state(
+                security_list_id,
+                oci.core.models.UpdateSecurityListDetails(
+                    ingress_security_rules=security_list_ingress_rules,
+                    egress_security_rules=security_list.data.egress_security_rules
+                ),
+                [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE]
+            )
+
+    def get_vcn(self, name):
         """
         Find a Vcn by reservation_id.
         :return: The Vcn
@@ -25,21 +45,47 @@ class OciNetworkOps(object):
         result = pagination.list_call_get_all_results(
             self.network_client.list_vcns,
             self._resource_config.compartment_ocid,
-            display_name=self._resource_config.reservation_id
+            display_name=name
         )
         for vcn in result.data:
-            if self._resource_config.reservation_id == vcn.display_name:
+            if vcn.display_name == name:
                 return vcn
 
-    def get_subnet(self, vcn_id, subnet_cidr=None):
+    def get_vcn_by_tag(self, tag_value):
         """
-        Find a unique Subnet by name.
+        Find a Vcn by reservation_id.
+        :return: The Vcn
+        :rtype: list<oci.core.models.Vcn>
+        """
+
+        result = pagination.list_call_get_all_results(
+            self.network_client.list_vcns,
+            self._resource_config.compartment_ocid
+        )
+        response = []
+        for vcn in result.data:
+            if vcn.freeform_tags.get("ReservationId", "") == tag_value:
+                response.append(vcn)
+        return response
+
+    def get_subnet(self, subnet_id):
+        """Retrieve subnet object by subnet id
+
+        :param subnet_id:
+        :return: Subnet
+        :rtype: oci.core.models.Subnet
+        """
+        return self.network_client.get_subnet(subnet_id).data
+
+    def get_subnets(self, vcn_id, subnet_cidr=None):
+        """Find subnets by cidr.
+
         :param vcn_id: The OCID of the VCN which will own the subnet.
         :type vcn_id: str
         :param subnet_cidr: Subnet CIDR.
         :type subnet_cidr: str
-        :return: The Subnet
-        :rtype: core_models.Subnet
+        :return: List of Subnets
+        :rtype: List<oci.core.models.Subnet>
         """
         result = pagination.list_call_get_all_results(
             self.network_client.list_subnets,
@@ -68,6 +114,32 @@ class OciNetworkOps(object):
         )
 
         return result.data
+
+    def get_local_peering_gws(self, vcn_id):
+        """
+        Find a unique Subnet by name.
+        :param vcn_id: The OCID of the VCN which will own the subnet.
+        :type vcn_id: str
+        :return: The Subnet
+        :rtype: core_models.Subnet
+        """
+        result = pagination.list_call_get_all_results(
+            self.network_client.list_local_peering_gateways,
+            self._resource_config.compartment_ocid,
+            vcn_id=vcn_id
+        )
+
+        return result.data
+
+    def get_local_peering_gw(self, vcn_id, name):
+        """
+        Find a unique Subnet by name.
+        :param vcn_id: The OCID of the VCN which will own the subnet.
+        :type vcn_id: str
+        :return: The Subnet
+        :rtype: core_models.Subnet
+        """
+        return next((x for x in self.get_local_peering_gws(vcn_id=vcn_id) if x.display_name == name), None)
 
     def get_inet_gateways(self, vcn_id):
         """
@@ -103,9 +175,9 @@ class OciNetworkOps(object):
                 continue
 
             rule_parameters = {
-                        "protocol": inbound_ports_protocol_map.get(port.protocol),
-                        "source": port.cidr
-                    }
+                "protocol": inbound_ports_protocol_map.get(port.protocol),
+                "source": port.cidr
+            }
             if "all" not in port.protocol:
                 rules_to_add_list = port.ports.split(",")
                 for rule_ports in rules_to_add_list:
@@ -136,8 +208,7 @@ class OciNetworkOps(object):
                 [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE]
             )
 
-    def configure_default_security_rule(self):
-        vcn = self.get_vcn()
+    def configure_default_security_rule(self, vcn):
         security_list = self.network_client.get_security_list(vcn.default_security_list_id)
         security_list_update_details = oci.core.models.UpdateSecurityListDetails()
         security_list_update_details.egress_security_rules = security_list.data.egress_security_rules
@@ -159,6 +230,31 @@ class OciNetworkOps(object):
             [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE]
         )
 
+    def add_lpg_route(self, route_table_id, target_cidr, network_sevice_id):
+        rule = oci.core.models.RouteRule(
+            destination=target_cidr,
+            destination_type='CIDR_BLOCK',
+            network_entity_id=network_sevice_id
+        )
+        self.update_route_table(route_table_id, rule)
+
+    def update_route_table(self, route_table_id, route_rule, append=True):
+        default_route_table = self.network_client.get_route_table(route_table_id)
+        route_rules = default_route_table.data.route_rules
+
+        if append:
+            route_rules.append(route_rule)
+        else:
+            route_rules = [route_rule]
+        update_route_table_details = oci.core.models.UpdateRouteTableDetails(
+            route_rules=route_rules,
+            freeform_tags=self._resource_config.tags)
+        self.network_client_ops.update_route_table_and_wait_for_state(
+            route_table_id,
+            update_route_table_details,
+            wait_for_states=[oci.core.models.RouteTable.LIFECYCLE_STATE_AVAILABLE]
+        )
+
     def update_subnet_security_lists(self, subnet, security_list_id):
         new_security_list = subnet.security_list_ids
         new_security_list.append(security_list_id)
@@ -167,23 +263,27 @@ class OciNetworkOps(object):
             oci.core.models.UpdateSubnetDetails(security_list_ids=new_security_list),
             [oci.core.models.Subnet.LIFECYCLE_STATE_AVAILABLE])
 
-    def create_vcn(self, vcn_cidr):
-        if vcn_cidr:
-            vcn = self.get_vcn()
+    def create_vcn(self, vcn_cidr, name=None, add_inet_gw_route=False):
+        if not vcn_cidr:
+            raise OciShellError("Failed to create VCN, no cidr provided")
 
-            if not vcn:
-                new_vcn = self.network_client_ops.create_vcn_and_wait_for_state(
-                    oci.core.models.CreateVcnDetails(
-                        cidr_block=vcn_cidr,
-                        display_name=self._resource_config.reservation_id,
-                        freeform_tags=self._resource_config.tags,
-                        compartment_id=self._resource_config.compartment_ocid
-                    ),
-                    [oci.core.models.Vcn.LIFECYCLE_STATE_AVAILABLE]
-                )
-                vcn = new_vcn.data
-                default_route_table = self.network_client.get_route_table(vcn.default_route_table_id)
-                route_rules = default_route_table.data.route_rules
+        if not name:
+            name = self._resource_config.reservation_id
+        vcn = self.get_vcn(name)
+
+        if not vcn:
+            new_vcn = self.network_client_ops.create_vcn_and_wait_for_state(
+                oci.core.models.CreateVcnDetails(
+                    cidr_block=vcn_cidr,
+                    display_name=name,
+                    freeform_tags=self._resource_config.tags,
+                    compartment_id=self._resource_config.compartment_ocid
+                ),
+                [oci.core.models.Vcn.LIFECYCLE_STATE_AVAILABLE]
+            )
+            vcn = new_vcn.data
+
+            if add_inet_gw_route:
                 inet_gw = self.network_client_ops.create_internet_gateway_and_wait_for_state(
                     oci.core.models.CreateInternetGatewayDetails(
                         vcn_id=vcn.id,
@@ -193,32 +293,47 @@ class OciNetworkOps(object):
                         compartment_id=self._resource_config.compartment_ocid),
                     [oci.core.models.InternetGateway.LIFECYCLE_STATE_AVAILABLE]
                 )
+
+                default_route_table_id = vcn.default_route_table_id
                 default_static_rule = oci.core.models.RouteRule(
-                    cidr_block=None,
+                    # cidr_block=None,
                     destination=self.DEFAULT_STATIC_CIDR,
                     destination_type='CIDR_BLOCK',
                     network_entity_id=inet_gw.data.id
                 )
-                route_rules.append(default_static_rule)
-                update_route_table_details = oci.core.models.UpdateRouteTableDetails(
-                    route_rules=route_rules,
-                    freeform_tags=self._resource_config.tags)
-                self.network_client_ops.update_route_table_and_wait_for_state(
-                    vcn.default_route_table_id,
-                    update_route_table_details,
-                    wait_for_states=[oci.core.models.RouteTable.LIFECYCLE_STATE_AVAILABLE]
-                )
-            return vcn
+                self.update_route_table(default_route_table_id, default_static_rule)
+        self.configure_default_security_rule(vcn)
+
+        return vcn
+
+    def create_lpg(self, vcn_ocid, name, target_vcn_id):
+        lpg = self.get_local_peering_gw(vcn_ocid, name)
+        if not lpg:
+            tags = self._resource_config.tags
+            tags["Target_VCN_ID"] = target_vcn_id
+            new_lpg = self.network_client_ops.create_local_peering_gateway_and_wait_for_state(
+                oci.core.models.CreateLocalPeeringGatewayDetails(
+                    compartment_id=self._resource_config.compartment_ocid,
+                    freeform_tags=tags,
+                    display_name=name,
+                    vcn_id=vcn_ocid,
+                ),
+                [oci.core.models.LocalPeeringGateway.LIFECYCLE_STATE_AVAILABLE]
+            )
+            lpg = new_lpg.data
+        return lpg
 
     def create_subnet(self, subnet_cidr, name, vcn_ocid, availability_domain):
-        subnet = self.get_subnet(vcn_id=vcn_ocid,
-                                 subnet_cidr=subnet_cidr)
+        subnet = self.get_subnets(vcn_id=vcn_ocid,
+                                  subnet_cidr=subnet_cidr)
         if not subnet:
+            tags = self._resource_config.tags
+            tags["VCN_ID"] = vcn_ocid
             new_subnet = self.network_client_ops.create_subnet_and_wait_for_state(
                 oci.core.models.CreateSubnetDetails(
                     compartment_id=self._resource_config.compartment_ocid,
                     availability_domain=availability_domain,
-                    freeform_tags=self._resource_config.tags,
+                    freeform_tags=tags,
                     display_name=name,
                     vcn_id=vcn_ocid,
                     cidr_block=subnet_cidr
@@ -228,12 +343,31 @@ class OciNetworkOps(object):
             subnet = new_subnet.data
         return subnet
 
+    def connect_lpgs(self, source_lpg_id, target_lpg_id):
+        cmd_to_call = self.network_client.connect_local_peering_gateways
+        cmd_to_check_status = self.network_client.get_local_peering_gateway
+        state_to_check = "peering_status"
+        cmd_kwargs = {"local_peering_gateway_id": source_lpg_id,
+                      "connect_local_peering_gateways_details":
+                          oci.core.models.ConnectLocalPeeringGatewaysDetails(
+                              peer_id=target_lpg_id)
+                      }
+        lpg = call_oci_command_with_waiter(self.network_client,
+                                           cmd_to_call,
+                                           cmd_to_check_status,
+                                           ocid_to_check=source_lpg_id,
+                                           state_to_check=state_to_check,
+                                           wait_for_states=[oci.core.models.LocalPeeringGateway.PEERING_STATUS_PEERED],
+                                           cmd_kwargs=cmd_kwargs)
+        return lpg
+
     def remove_vcn(self):
-        vcn = self.get_vcn()
-        if vcn:
-            subnets = self.get_subnet(vcn_id=vcn.id) or []
+        vcns = self.get_vcn_by_tag(self._resource_config.reservation_id)
+        for vcn in vcns:
+            subnets = self.get_subnets(vcn_id=vcn.id) or []
             service_gateways = self.get_service_gateways(vcn_id=vcn.id) or []
             internet_gateways = self.get_inet_gateways(vcn_id=vcn.id) or []
+            lpgs = self.get_local_peering_gws(vcn_id=vcn.id)
             for subnet in subnets:
                 self.network_client_ops.delete_subnet_and_wait_for_state(
                     subnet.id,
@@ -244,6 +378,11 @@ class OciNetworkOps(object):
                 update_route_table_details,
                 wait_for_states=[oci.core.models.RouteTable.LIFECYCLE_STATE_AVAILABLE]
             )
+            for local_peering_gw in lpgs:
+                self.network_client_ops.delete_local_peering_gateway_and_wait_for_state(
+                    local_peering_gw.id,
+                    wait_for_states=[oci.core.models.LocalPeeringGateway.LIFECYCLE_STATE_TERMINATED]
+                )
             for service_gw in service_gateways:
                 self.network_client_ops.delete_service_gateway_and_wait_for_state(
                     service_gw.id,

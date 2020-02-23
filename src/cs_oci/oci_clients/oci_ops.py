@@ -2,8 +2,9 @@ import json
 
 import oci
 
-from oci_compute_ops import OciComputeOps
-from oci_networking_ops import OciNetworkOps
+from cs_oci.helper.shell_helper import OciShellError
+from cs_oci.oci_clients.ops.oci_compute_ops import OciComputeOps
+from cs_oci.oci_clients.ops.oci_networking_ops import OciNetworkOps
 from cryptography.hazmat.primitives import serialization as crypto_serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend as crypto_default_backend
@@ -109,10 +110,7 @@ class OciOps(object):
             crypto_serialization.Encoding.PEM,
             crypto_serialization.PrivateFormat.TraditionalOpenSSL,
             crypto_serialization.NoEncryption())
-        public_key = key.public_key().public_bytes(
-            crypto_serialization.Encoding.OpenSSH,
-            crypto_serialization.PublicFormat.OpenSSH
-        )
+        public_key = key.public_key().public_bytes(crypto_serialization.Encoding.OpenSSH,crypto_serialization.PublicFormat.OpenSSH)
         return private_key, public_key
 
     def upload_keypairs(self, private_key, public_key):
@@ -151,3 +149,24 @@ class OciOps(object):
                                                      object_name=self.resource_config.reservation_id)
         except oci.exceptions.ServiceError:
             pass
+
+    def set_as_routing_gw(self, instance_id=None):
+        if not instance_id:
+            instance_id = self.resource_config.remote_instance_id
+            if not instance_id:
+                raise OciShellError("Failed to retrieve instance ocid")
+
+        vnic_attachments = self.compute_ops.get_vnic_attachments(instance_id)
+        if len(vnic_attachments) < 2:
+            raise OciShellError("Unable to setas routing gateway: Only 1 vnic attached")
+        for vnic_attachment in vnic_attachments:
+            vnic = self.network_ops.network_client.get_vnic(vnic_attachment.vnic_id)
+            subnet = self.network_ops.get_subnet(vnic.data.subnet_id)
+            vcn_id = subnet.freeform_tags.get("VCN_ID")
+            vcn = self.network_ops.network_client.get_vcn(vcn_id)
+            route_table = vcn.data.default_route_table
+            route_rule = oci.core.models.RouteRule(destination=subnet.cidr_block,
+                                                   destination_type="CIDR_BLOCK",
+                                                   network_entity_id=vnic.data.private_ip)
+
+            self.network_ops.update_route_table(route_table_id=route_table, route_rule=route_rule)

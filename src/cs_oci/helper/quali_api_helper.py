@@ -79,7 +79,7 @@ class QualiAPIHelper(object):
 
     def remove_attached_files(self, reservation_id):
         uri = 'API/Package/DeleteFileFromReservation'
-        for file_name in self.get_attached_files(reservation_id):
+        for file_name in self.get_attached_files(reservation_id) or []:
             file_to_delete = {"reservationId": reservation_id,
                               "FileName": file_name
                               }

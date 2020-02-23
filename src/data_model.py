@@ -1,7 +1,7 @@
 from cloudshell.shell.core.session.cloudshell_session import CloudShellSessionContext
 from cloudshell.shell.core.session.logging_session import LoggingSessionContext
 
-from quali_api_helper import QualiAPIHelper
+from cs_oci.helper.quali_api_helper import QualiAPIHelper
 
 
 class OCIShellDriverResource(object):
@@ -22,7 +22,7 @@ class OCIShellDriverResource(object):
         :param context: Command context
         :type context: ResourceCommandContext, ResourceRemoteCommandContext
         :return:
-        :rtype OCIShellDriverResource
+        :rtype: OCIShellDriverResource
         """
         result = OCIShellDriverResource(name=context.resource.name, context=context)
         for attr in context.resource.attributes:
@@ -31,6 +31,11 @@ class OCIShellDriverResource(object):
 
     @property
     def api(self):
+        """
+
+        :return: CloudShell API Session Object
+        :rtype: cloudshell.api.cloudshell_api.CloudShellAPISession
+        """
         return CloudShellSessionContext(self._context).get_api()
 
     @property
@@ -44,11 +49,9 @@ class OCIShellDriverResource(object):
         address = self._context.connectivity.server_address
         token = self._context.connectivity.admin_auth_token
         use_https = self._context.connectivity.cloudshell_api_scheme.lower() == "https"
+        # instance = QualiAPIHelper(address, username="admin", password="admin", domain=domain, use_https=use_https)
         instance = QualiAPIHelper(address, token=token, domain=domain, use_https=use_https)
-        # if token:
-        #     instance = QualiAPIHelper(address, token=token, domain=domain, use_https=use_https)
-        # else:
-        #     instance = QualiAPIHelper(address, username='admin', password='admin', domain=domain)
+
         return instance
 
     @property

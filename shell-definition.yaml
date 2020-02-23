@@ -49,11 +49,11 @@ node_types:
         - valid_values: ["us-phoenix-1", "us-ashburn-2", "eu-frankfurt-1", "uk-london-1"]
       Default Keypair:
         type: string
-        default: 
+        default:
         description: Name of default Keypair for new instances
       Keypairs Path:
         type: string
-        default: 
+        default:
         description: Path to Local Keypair repository
     capabilities:
       concurrent_execution:
@@ -93,11 +93,11 @@ node_types:
             - valid_values: ["us-phoenix-1", "us-ashburn-2", "eu-frankfurt-1", "uk-london-1"]
           Default Keypair:
             type: string
-            default: 
+            default:
             description: Name of default Keypair for new instances
           Keypairs Path:
             type: string
-            default: 
+            default:
             description: Path to Local Keypair repository
           Networks in use:
             type: string
