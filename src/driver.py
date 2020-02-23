@@ -462,10 +462,6 @@ class OCIShellDriver(ResourceDriverInterface):
         try:
             prepare_network_results = oci_networks.prepare_sandbox_infra(request_object)
 
-            # if request_object.is_default_flow:
-            #     prepare_network_results = oci_networks.prepare_default_sandbox_infra(request_object)
-            # else:
-            #     prepare_network_results = oci_networks.prepare_vcn_sandbox_infra(request_object)
         except Exception as e:
             oci_ops.network_ops.remove_vcn()
             raise
