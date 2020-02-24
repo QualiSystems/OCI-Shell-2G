@@ -1,4 +1,6 @@
+import re
 from copy import copy
+import ipaddress
 
 from cloudshell.api.cloudshell_api import AttributeNameValue
 from cloudshell.cp.core.models import PrepareCloudInfraResult
@@ -42,36 +44,43 @@ class OciNetworkInfraFlow(object):
                     continue
             else:
                 vcn_subnet = vcn_request.subnet_list[0]
-                cidr = vcn_subnet.cidr
+                # cidr = vcn_subnet.cidr
+                # vcn_alias_match = re.search(r"(?P<name>^.*)\s+-\s+\d+\.", vcn_subnet.alias)
+                # if vcn_alias_match:
+                #     net = ipaddress.ip_network(cidr)
+                #     vcn_name = "{} - {}-{}".format(vcn_alias_match.groupdict().get("name", "VCN"),
+                #                                    net.network_address,
+                #                                    net.num_addresses)
+                # else:
+                #     vcn_name = "VCN-{}".format(cidr.replace("/", "-"))
+
                 is_public = vcn_subnet.attributes.public
-                vcn_name = "VCN-{}".format(cidr.replace("/", "-"))
-                oci_vcn_name = "{}-{}".format(self._resource_config.reservation_id, vcn_name)
-                vcn = self._oci_ops.network_ops.create_vcn(cidr, oci_vcn_name, is_public)
+
+                oci_vcn_name = "{}-{}".format(self._resource_config.reservation_id, vcn_subnet.alias)
+                vcn = self._oci_ops.network_ops.create_vcn(vcn_subnet.cidr, oci_vcn_name, is_public)
                 self._resource_config.api.SetServiceAttributesValues(self._resource_config.reservation_id,
                                                                      vcn_subnet.alias,
                                                                      [AttributeNameValue("VCN Id", vcn.id)])
-                self._resource_config.api.SetServiceName(self._resource_config.reservation_id,
-                                                         vcn_subnet.alias,
-                                                         vcn_name)
-                vcn_subnet.alias = vcn_name
+
                 if vcn_subnet.attributes.allow_sandbox_traffic:
                     traffic_vcn_list.append(vcn)
+
             result_list.extend(self.create_subnets(vcn_request.subnet_list, vcn.id, availability_domain))
         vcn_dict = self._convert_list(traffic_vcn_list)
         for vcn in vcn_dict:
-            vcn_id = vcn.id
-            src_vcn_name = "To-{}".format(vcn.display_name)
+            # vcn_id = vcn.id
+            # src_vcn_name = "To-{}".format(vcn.display_name)
 
             for dst_vcn in vcn_dict.get(vcn):
-                dst_vcn_id = dst_vcn.id
+                # dst_vcn_id = dst_vcn.id
 
-                dst_vcn_name = "To-{}".format(dst_vcn.display_name)
+                # dst_vcn_name = "To-{}".format(dst_vcn.display_name)
 
-                src_lpg = self._oci_ops.network_ops.create_lpg(vcn_id, dst_vcn_name, dst_vcn_id)
-                dst_lpg = self._oci_ops.network_ops.create_lpg(dst_vcn_id, src_vcn_name, vcn_id)
-                self._oci_ops.network_ops.connect_lpgs(src_lpg.id, dst_lpg.id)
-                self._oci_ops.network_ops.add_lpg_route(vcn.default_route_table_id, dst_vcn.cidr_block, src_lpg.id)
-                self._oci_ops.network_ops.add_lpg_route(dst_vcn.default_route_table_id, vcn.cidr_block, dst_lpg.id)
+                # src_lpg = self._oci_ops.network_ops.create_lpg(vcn_id, dst_vcn_name, dst_vcn_id)
+                # dst_lpg = self._oci_ops.network_ops.create_lpg(dst_vcn_id, src_vcn_name, vcn_id)
+                # self._oci_ops.network_ops.connect_lpgs(src_lpg.id, dst_lpg.id)
+                # self._oci_ops.network_ops.add_lpg_route(vcn.default_route_table_id, dst_vcn.cidr_block, src_lpg.id)
+                # self._oci_ops.network_ops.add_lpg_route(dst_vcn.default_route_table_id, vcn.cidr_block, dst_lpg.id)
                 self._oci_ops.network_ops.allow_local_traffic(vcn.default_security_list_id, dst_vcn.cidr_block)
                 self._oci_ops.network_ops.allow_local_traffic(dst_vcn.default_security_list_id, vcn.cidr_block)
                 vcn_dict.get(dst_vcn).remove(vcn)
@@ -85,8 +94,6 @@ class OciNetworkInfraFlow(object):
             dst_vcn_list.remove(vcn)
             result[vcn] = dst_vcn_list
         return result
-
-
 
     def create_subnets(self, subnet_list, vcn_id, availability_domain):
         """

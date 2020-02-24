@@ -1,7 +1,7 @@
 import oci
 from oci import pagination
 
-from cs_oci.helper.shell_helper import OciShellError
+from cs_oci.helper.shell_helper import OciShellError, RETRY_STRATEGY
 
 
 class OciComputeOps(object):
@@ -17,16 +17,19 @@ class OciComputeOps(object):
         """
         config = resource_config.oci_config
         self.resource_config = resource_config
-        self.compute_client = oci.core.ComputeClient(config)
+        self.compute_client = oci.core.ComputeClient(config, retry_strategy=RETRY_STRATEGY)
         self.compute_client_ops = oci.core.ComputeClientCompositeOperations(self.compute_client)
         pass
 
     def change_instance_state(self, instance_id, new_state):
-        self.compute_client_ops.instance_action_and_wait_for_state(
-            instance_id,
-            new_state,
-            [self._INSTANCE_STATE_MAP.get(new_state)]
-        )
+        instance = self.compute_client.get_instance(instance_id)
+        new_state = self._INSTANCE_STATE_MAP.get(new_state)
+        if instance.data and instance.data.lifecycle_state != new_state:
+            self.compute_client_ops.instance_action_and_wait_for_state(
+                instance_id,
+                new_state,
+                [new_state]
+            )
 
     def launch_instance(self, availability_domain,
                         subnet_id,
@@ -55,20 +58,18 @@ class OciComputeOps(object):
             display_name=self.resource_config.reservation_id,
             skip_source_dest_check=vm_details.skip_src_dst_check,
             subnet_id=subnet_id)
+        if vm_details.requested_private_ip:
+            new_inst_details.create_vnic_details.private_ip = vm_details.requested_private_ip
         new_inst_details.shape = vm_details.vm_shape
         new_inst_details.image_id = vm_details.image_id
         new_inst_details.metadata = {'ssh_authorized_keys': ssh_pub_key}
 
         # Start the VM
-        retry_strategy = oci.retry.RetryStrategyBuilder().add_max_attempts(10) \
-            .add_total_elapsed_time(600) \
-            .add_service_error_check() \
-            .get_retry_strategy()
 
         launch_instance_response = self.compute_client_ops.launch_instance_and_wait_for_state(
             new_inst_details,
             wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING],
-            operation_kwargs={"retry_strategy": retry_strategy})
+            operation_kwargs={"retry_strategy": RETRY_STRATEGY})
         if launch_instance_response.data:
             return launch_instance_response.data
         else:

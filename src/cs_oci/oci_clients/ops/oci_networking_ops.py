@@ -2,7 +2,7 @@ import oci
 from oci import pagination
 
 from cs_oci.helper.oci_command_executor_with_wait import call_oci_command_with_waiter
-from cs_oci.helper.shell_helper import OciShellError
+from cs_oci.helper.shell_helper import OciShellError, RETRY_STRATEGY
 
 
 class OciNetworkOps(object):
@@ -15,7 +15,7 @@ class OciNetworkOps(object):
         """
         config = resource_config.oci_config
         self._resource_config = resource_config
-        self.network_client = oci.core.VirtualNetworkClient(config)
+        self.network_client = oci.core.VirtualNetworkClient(config, retry_strategy=RETRY_STRATEGY)
         self.network_client_ops = oci.core.VirtualNetworkClientCompositeOperations(self.network_client)
 
     def allow_local_traffic(self, security_list_id, cidr_block):
@@ -50,6 +50,16 @@ class OciNetworkOps(object):
         for vcn in result.data:
             if vcn.display_name == name:
                 return vcn
+
+    def get_private_ip_object(self, subnet_id, ip_address):
+        result = pagination.list_call_get_all_results(
+            self.network_client.list_private_ips,
+            subnet_id=subnet_id,
+            ip_address=ip_address
+        )
+        for ip in result.data:
+            if ip.ip_address == ip_address:
+                return ip
 
     def get_vcn_by_tag(self, tag_value):
         """
@@ -205,7 +215,8 @@ class OciNetworkOps(object):
                     egress_security_rules=[oci.core.models.EgressSecurityRule(destination=self.DEFAULT_STATIC_CIDR,
                                                                               protocol="all")]
                 ),
-                [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE]
+                [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE],
+                operation_kwargs={"retry_strategy": RETRY_STRATEGY}
             )
 
     def configure_default_security_rule(self, vcn):
@@ -227,7 +238,8 @@ class OciNetworkOps(object):
         self.network_client_ops.update_security_list_and_wait_for_state(
             security_list_id,
             update_security_list_details,
-            [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE]
+            [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE],
+            operation_kwargs={"retry_strategy": RETRY_STRATEGY}
         )
 
     def add_lpg_route(self, route_table_id, target_cidr, network_sevice_id):
@@ -236,9 +248,9 @@ class OciNetworkOps(object):
             destination_type='CIDR_BLOCK',
             network_entity_id=network_sevice_id
         )
-        self.update_route_table(route_table_id, rule)
+        self.update_route_table(route_table_id, rule, tag={"Target": "LPG"})
 
-    def update_route_table(self, route_table_id, route_rule, append=True):
+    def update_route_table(self, route_table_id, route_rule, tag=None, append=True):
         default_route_table = self.network_client.get_route_table(route_table_id)
         route_rules = default_route_table.data.route_rules
 
@@ -246,6 +258,11 @@ class OciNetworkOps(object):
             route_rules.append(route_rule)
         else:
             route_rules = [route_rule]
+
+        tags = self._resource_config.tags
+        if tag:
+            tags.update(tag)
+
         update_route_table_details = oci.core.models.UpdateRouteTableDetails(
             route_rules=route_rules,
             freeform_tags=self._resource_config.tags)
@@ -261,7 +278,8 @@ class OciNetworkOps(object):
         self.network_client_ops.update_subnet_and_wait_for_state(
             subnet.id,
             oci.core.models.UpdateSubnetDetails(security_list_ids=new_security_list),
-            [oci.core.models.Subnet.LIFECYCLE_STATE_AVAILABLE])
+            [oci.core.models.Subnet.LIFECYCLE_STATE_AVAILABLE],
+            operation_kwargs={"retry_strategy": RETRY_STRATEGY})
 
     def create_vcn(self, vcn_cidr, name=None, add_inet_gw_route=False):
         if not vcn_cidr:
@@ -279,7 +297,8 @@ class OciNetworkOps(object):
                     freeform_tags=self._resource_config.tags,
                     compartment_id=self._resource_config.compartment_ocid
                 ),
-                [oci.core.models.Vcn.LIFECYCLE_STATE_AVAILABLE]
+                [oci.core.models.Vcn.LIFECYCLE_STATE_AVAILABLE],
+                operation_kwargs={"retry_strategy": RETRY_STRATEGY}
             )
             vcn = new_vcn.data
 
@@ -291,7 +310,8 @@ class OciNetworkOps(object):
                         freeform_tags=self._resource_config.tags,
                         is_enabled=True,
                         compartment_id=self._resource_config.compartment_ocid),
-                    [oci.core.models.InternetGateway.LIFECYCLE_STATE_AVAILABLE]
+                    [oci.core.models.InternetGateway.LIFECYCLE_STATE_AVAILABLE],
+                    operation_kwargs={"retry_strategy": RETRY_STRATEGY}
                 )
 
                 default_route_table_id = vcn.default_route_table_id
@@ -301,7 +321,7 @@ class OciNetworkOps(object):
                     destination_type='CIDR_BLOCK',
                     network_entity_id=inet_gw.data.id
                 )
-                self.update_route_table(default_route_table_id, default_static_rule)
+                self.update_route_table(default_route_table_id, default_static_rule, tag={"Target": "Internet"})
         self.configure_default_security_rule(vcn)
 
         return vcn
@@ -338,7 +358,8 @@ class OciNetworkOps(object):
                     vcn_id=vcn_ocid,
                     cidr_block=subnet_cidr
                 ),
-                [oci.core.models.Subnet.LIFECYCLE_STATE_AVAILABLE]
+                [oci.core.models.Subnet.LIFECYCLE_STATE_AVAILABLE],
+                operation_kwargs={"retry_strategy": RETRY_STRATEGY}
             )
             subnet = new_subnet.data
         return subnet

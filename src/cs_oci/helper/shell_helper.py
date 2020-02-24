@@ -2,6 +2,13 @@ import re
 
 import jsonpickle
 from cloudshell.cp.core.models import VmDetailsProperty, VmDetailsNetworkInterface, VmDetailsData
+from oci.retry import RetryStrategyBuilder
+
+
+RETRY_STRATEGY = RetryStrategyBuilder().add_max_attempts(10) \
+            .add_total_elapsed_time(600) \
+            .add_service_error_check() \
+            .get_retry_strategy()
 
 
 class OciShellError(Exception):

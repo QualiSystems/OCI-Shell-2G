@@ -44,8 +44,8 @@ class OCIShellDriver(ResourceDriverInterface):
 
         actions = self.request_parser.convert_driver_request_to_actions(request)
         resource_config = OCIShellDriverResource.create_from_context(context)
-        resource_config.api.WriteMessageToReservationOutput(context.reservation.reservation_id,
-                                                            'Request JSON: ' + request)
+        # resource_config.api.WriteMessageToReservationOutput(context.reservation.reservation_id,
+        #                                                     'Request JSON: ' + request)
         with LoggingSessionContext(context) as logger:
 
             deploy_action = None
@@ -91,12 +91,22 @@ class OCIShellDriver(ResourceDriverInterface):
 
         primary_vnic_action = None
         if subnet_actions:
-            subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
-            primary_vnic_action = subnet_actions[0]
-            primary_vnic0_action = next((
-                action for action in subnet_actions if action.actionParams.vnicName == "0"), None)
-            if primary_vnic0_action:
-                primary_vnic_action = primary_vnic0_action
+            if vm_instance_details.requested_private_ip:
+                ip_pattern = vm_instance_details.requested_private_ip.rpartition(".")[0]
+                primary_vnic_action = next((s for s in subnet_actions
+                                            if s.actionParams.subnetServiceAttributes.get("Requested CIDR",
+                                                                                          "").startswith(ip_pattern)),
+                                           None)
+                if not primary_vnic_action:
+                    primary_vnic_action = next((s for s in subnet_actions
+                                                if s.actionParams.cidr.startswith(ip_pattern)), None)
+            if not primary_vnic_action:
+                subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
+                primary_vnic_action = subnet_actions[0]
+                primary_vnic0_action = next((
+                    action for action in subnet_actions if action.actionParams.vnicName == "0"), None)
+                if primary_vnic0_action:
+                    primary_vnic_action = primary_vnic0_action
 
             secondary_subnet_actions = copy(subnet_actions)
             secondary_subnet_actions.remove(primary_vnic_action)
@@ -172,7 +182,8 @@ class OCIShellDriver(ResourceDriverInterface):
                     else:
                         vnic_public_ip = False
                         message = "Unable to find secondary subnet"
-                        secondary_subnet_name = oci_ops.network_ops.get_subnet(vnic_action.actionParams.subnetId).display_name
+                        secondary_subnet_name = oci_ops.network_ops.get_subnet(
+                            vnic_action.actionParams.subnetId).display_name
                         if secondary_subnet_name:
                             message = "Could not add public IP to VNIC in subnet {}, " \
                                       "to {}. Access possible" \
@@ -449,15 +460,15 @@ class OCIShellDriver(ResourceDriverInterface):
         resource_config = OCIShellDriverResource.create_from_context(context)
         with resource_config.get_logger() as logger:
             oci_ops = OciOps(resource_config)
-            resource_config.api.WriteMessageToReservationOutput(context.reservation.reservation_id,
-                                                                'Request JSON: ' + request)
+            # resource_config.api.WriteMessageToReservationOutput(context.reservation.reservation_id,
+            #                                                     'Request JSON: ' + request)
             oci_networks = OciNetworkInfraFlow(oci_ops, logger, resource_config)
             json_request = json.loads(request)
 
             resource_config.api.WriteMessageToReservationOutput(resource_config.reservation_id,
                                                                 'Preparing Sandbox Connectivity...')
 
-        request_object = PrepareSandboxInfraRequest(json_request)
+        request_object = PrepareSandboxInfraRequest(resource_config, json_request)
         request_object.parse_request()
         try:
             prepare_network_results = oci_networks.prepare_sandbox_infra(request_object)

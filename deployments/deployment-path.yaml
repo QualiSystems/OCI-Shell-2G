@@ -30,8 +30,13 @@ node_types:
         tags: [user_input,editable_only_in_app_template]
       Add Public IP:
         type: boolean
-        default:
+        default: False
         description: True if the App needs to have a Public IP
+        tags: [user_input]
+      Requested Private IP:
+        type: string
+        default:
+        description: Specify custom private ip address
         tags: [user_input]
       Inbound Ports:
         type: string

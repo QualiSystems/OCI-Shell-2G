@@ -28,6 +28,10 @@ class InstanceDetails(object):
         return public_ip_str.lower() == "true"
 
     @property
+    def requested_private_ip(self):
+        return self._deploy_attribs.get("{}.Requested Private IP".format(self._deployment_path), "")
+
+    @property
     def skip_src_dst_check(self):
         public_ip_str = self._deploy_attribs.get("{}.Skip VNIC src or dst check".format(self._deployment_path), "")
 
