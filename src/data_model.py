@@ -49,8 +49,8 @@ class OCIShellDriverResource(object):
         address = self._context.connectivity.server_address
         token = self._context.connectivity.admin_auth_token
         use_https = self._context.connectivity.cloudshell_api_scheme.lower() == "https"
-        # instance = QualiAPIHelper(address, username="admin", password="admin", domain=domain, use_https=use_https)
-        instance = QualiAPIHelper(address, token=token, domain=domain, use_https=use_https)
+        instance = QualiAPIHelper(address, username="admin", password="admin", domain=domain, use_https=use_https)
+        # instance = QualiAPIHelper(address, token=token, domain=domain, use_https=use_https)
 
         return instance
 

@@ -31,15 +31,13 @@ class OciComputeOps(object):
                 [new_state]
             )
 
-    def launch_instance(self, availability_domain,
-                        subnet_id,
-                        app_name,
+    def launch_instance(self, app_name,
                         vm_details,
                         ssh_pub_key):
 
         compatible_shapes = pagination.list_call_get_all_results(self.compute_client.list_shapes,
                                                                  compartment_id=self.resource_config.compartment_ocid,
-                                                                 availability_domain=availability_domain,
+                                                                 availability_domain=vm_details.availability_domain,
                                                                  image_id=vm_details.image_id)
         is_shape_compatible = next((x.shape for x in compatible_shapes.data if x.shape == vm_details.vm_shape), None)
         if not is_shape_compatible:
@@ -48,18 +46,21 @@ class OciComputeOps(object):
 
         new_inst_details = oci.core.models.LaunchInstanceDetails()
         # Create LaunchInstanceDetails
-        new_inst_details.availability_domain = availability_domain
+        new_inst_details.availability_domain = vm_details.availability_domain
         new_inst_details.compartment_id = self.resource_config.compartment_ocid
-        new_inst_details.subnet_id = subnet_id
+        new_inst_details.subnet_id = vm_details.primary_subnet.subnet_id
         new_inst_details.display_name = app_name
         new_inst_details.freeform_tags = self.resource_config.tags
+        vnic_name = "{} Primary Vnic".format(app_name)
+        if vm_details.primary_subnet.private_ip:
+            vnic_name = vm_details.primary_subnet.private_ip.name or vnic_name
         new_inst_details.create_vnic_details = oci.core.models.CreateVnicDetails(
             assign_public_ip=vm_details.public_ip,
-            display_name=self.resource_config.reservation_id,
+            display_name=vnic_name,
             skip_source_dest_check=vm_details.skip_src_dst_check,
-            subnet_id=subnet_id)
-        if vm_details.requested_private_ip:
-            new_inst_details.create_vnic_details.private_ip = vm_details.requested_private_ip
+            subnet_id=vm_details.primary_subnet.subnet_id)
+        if vm_details.primary_subnet.private_ip and vm_details.primary_subnet.private_ip.ip:
+            new_inst_details.create_vnic_details.private_ip = vm_details.primary_subnet.private_ip.ip
         new_inst_details.shape = vm_details.vm_shape
         new_inst_details.image_id = vm_details.image_id
         new_inst_details.metadata = {'ssh_authorized_keys': ssh_pub_key}
@@ -68,8 +69,7 @@ class OciComputeOps(object):
 
         launch_instance_response = self.compute_client_ops.launch_instance_and_wait_for_state(
             new_inst_details,
-            wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING],
-            operation_kwargs={"retry_strategy": RETRY_STRATEGY})
+            wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING])
         if launch_instance_response.data:
             return launch_instance_response.data
         else:

@@ -23,7 +23,7 @@ class SubnetAttributes:
         self.allow_sandbox_traffic = None
         self.cidr = None
         self.is_vcn = False
-        self.public = False
+        self.public = True
         request_cidr = None
         for attrs in self._subnet_service_attrs:
             if attrs.get("attributeName", "").lower() == "allocated cidr":
@@ -111,7 +111,7 @@ class PrepareSandboxInfraRequest(object):
                                                    net.num_addresses)
                 else:
                     vcn_name = "VCN-{}".format(cidr.replace("/", "-"))
-                if not subnet.alias == vcn_name:
+                if subnet.alias != vcn_name:
                     self._resource_config.api.SetServiceName(self._resource_config.reservation_id,
                                                              subnet.alias,
                                                              vcn_name)

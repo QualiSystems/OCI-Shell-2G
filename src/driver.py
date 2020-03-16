@@ -87,47 +87,11 @@ class OCIShellDriver(ResourceDriverInterface):
 
         # Read deployment attributes
         app_name = deploy_action.actionParams.appName
-        vm_instance_details = InstanceDetails(deploy_action)
-
-        primary_vnic_action = None
-        if subnet_actions:
-            if vm_instance_details.requested_private_ip:
-                ip_pattern = vm_instance_details.requested_private_ip.rpartition(".")[0]
-                primary_vnic_action = next((s for s in subnet_actions
-                                            if s.actionParams.subnetServiceAttributes.get("Requested CIDR",
-                                                                                          "").startswith(ip_pattern)),
-                                           None)
-                if not primary_vnic_action:
-                    primary_vnic_action = next((s for s in subnet_actions
-                                                if s.actionParams.cidr.startswith(ip_pattern)), None)
-            if not primary_vnic_action:
-                subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
-                primary_vnic_action = subnet_actions[0]
-                primary_vnic0_action = next((
-                    action for action in subnet_actions if action.actionParams.vnicName == "0"), None)
-                if primary_vnic0_action:
-                    primary_vnic_action = primary_vnic0_action
-
-            secondary_subnet_actions = copy(subnet_actions)
-            secondary_subnet_actions.remove(primary_vnic_action)
-
-            subnet_id = primary_vnic_action.actionParams.subnetId
-            subnet = oci_ops.network_ops.get_subnet(subnet_id)
-            if not subnet:
-                raise OciShellError("Failed to retrieve subnet")
-        else:
-            vcn = oci_ops.network_ops.get_vcn(resource_config.reservation_id)
-            subnets = oci_ops.network_ops.get_subnets(vcn.id)
-            subnet = subnets[0]
-            subnet_id = subnet.id
-
-        availability_domain = subnet.availability_domain
+        vm_instance_details = InstanceDetails(deploy_action, subnet_actions, oci_ops)
 
         ssh_pub_key = oci_ops.get_public_key()
 
-        instance = oci_ops.compute_ops.launch_instance(availability_domain=availability_domain,
-                                                       app_name=app_name,
-                                                       subnet_id=subnet_id,
+        instance = oci_ops.compute_ops.launch_instance(app_name=app_name,
                                                        ssh_pub_key=ssh_pub_key,
                                                        vm_details=vm_instance_details)
         instance_name = app_name + " " + instance.id.split(".")[-1][-10:]
@@ -148,57 +112,60 @@ class OCIShellDriver(ResourceDriverInterface):
             vnic_attachments = oci_ops.compute_ops.get_vnic_attachments(instance.id)
             vnic_attachment = next((v for v in vnic_attachments if v), None)
             if not vnic_attachment:
-                raise OciShellError("No vnic")
+                raise OciShellError("Unable to find primary instance vnic for app {}".format(instance_name))
             vnic_details = oci_ops.network_ops.network_client.get_vnic(vnic_attachment.vnic_id)
 
-            if primary_vnic_action:
+            if vm_instance_details.primary_subnet.action_id:
                 primary_interface_json = json.dumps({
                     'interface_id': vnic_details.data.id,
                     'IP': vnic_details.data.private_ip,
                     'Public IP': vnic_details.data.public_ip,
                     'MAC Address': vnic_details.data.mac_address
                 })
-                network_results.append(ConnectToSubnetActionResult(actionId=primary_vnic_action.actionId,
+                network_results.append(ConnectToSubnetActionResult(actionId=vm_instance_details.primary_subnet.action_id,
                                                                    interface=primary_interface_json))
 
             if vm_instance_details.inbound_ports:
                 new_security_list_item = oci_ops.network_ops.add_security_list(
-                    vcn_id=subnet.vcn_id,
+                    vcn_id=vm_instance_details.vcn_id,
                     security_list_name=instance_name,
                     inbound_ports=vm_instance_details.inbound_ports)
 
                 if new_security_list_item:
-                    oci_ops.network_ops.update_subnet_security_lists(subnet,
+                    oci_ops.network_ops.update_subnet_security_lists(vm_instance_details.primary_subnet.oci_subnet,
                                                                      security_list_id=new_security_list_item.data.id)
 
             oci_ops.compute_ops.update_instance_name(instance_name, instance.id)
             has_sec_public_ip = True
-            for vnic_action in secondary_subnet_actions:
-                vnic_public_ip = vnic_action.actionParams.isPublic
-                if vnic_public_ip:
-                    if has_sec_public_ip:
-                        vnic_public_ip = vnic_action.actionParams.isPublic
-                        has_sec_public_ip = False
-                    else:
-                        vnic_public_ip = False
-                        message = "Unable to find secondary subnet"
-                        secondary_subnet_name = oci_ops.network_ops.get_subnet(
-                            vnic_action.actionParams.subnetId).display_name
-                        if secondary_subnet_name:
-                            message = "Could not add public IP to VNIC in subnet {}, " \
-                                      "to {}. Access possible" \
-                                      " using private IP only.".format(secondary_subnet_name, instance_name)
-                            resource_config.api.WriteMessageToReservationOutput(resource_config.reservation_id,
-                                                                                "Warning, {}".format(message))
-                        logger.warning(message)
+            for vnic_action in vm_instance_details.secondary_subnets:
+                vnic_public_ip = vm_instance_details.public_ip
+                if vm_instance_details.public_ip:
+                    vnic_public_ip = vnic_action.is_public_subnet
+                    if vnic_public_ip:
+                        if has_sec_public_ip:
+                            vnic_public_ip = vnic_action.is_public_subnet
+                            has_sec_public_ip = False
+                        else:
+                            vnic_public_ip = False
+                            message = "Unable to find secondary subnet"
+                            secondary_subnet_name = oci_ops.network_ops.get_subnet(
+                                vnic_action.subnet_id).display_name
+                            if secondary_subnet_name:
+                                message = "Could not add public IP to VNIC in subnet {}, " \
+                                          "to {}. Access possible" \
+                                          " using private IP only.".format(secondary_subnet_name, instance_name)
+                                resource_config.api.WriteMessageToReservationOutput(resource_config.reservation_id,
+                                                                                    "Warning, {}".format(message))
+                            logger.warning(message)
 
-                interface_json = oci_ops.attach_secondary_vnics(name=vnic_action.actionId,
-                                                                subnet_id=vnic_action.actionParams.subnetId,
+                interface_json = oci_ops.attach_secondary_vnics(name=vnic_action.action_id,
+                                                                subnet_id=vnic_action.subnet_id,
                                                                 instance_id=instance.id,
                                                                 src_dst_check=vm_instance_details.skip_src_dst_check,
+                                                                private_ip=vnic_action.private_ip,
                                                                 is_public=vnic_public_ip)
                 network_results.append(
-                    ConnectToSubnetActionResult(actionId=vnic_action.actionId, interface=interface_json))
+                    ConnectToSubnetActionResult(actionId=vnic_action.action_id, interface=interface_json))
         except Exception as e:
             oci_ops.compute_ops.terminate_instance(instance.id)
             logger.exception("Failed to deploy {}:".format(app_name))

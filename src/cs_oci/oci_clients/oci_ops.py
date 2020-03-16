@@ -35,11 +35,16 @@ class OciOps(object):
             if vnic and vnic.data.is_primary:
                 return vnic.data
 
-    def attach_secondary_vnics(self, name, subnet_id, instance_id, is_public, src_dst_check):
+    def attach_secondary_vnics(self, name, subnet_id, instance_id, is_public, private_ip, src_dst_check):
         secondary_vnic_details = oci.core.models.CreateVnicDetails(assign_public_ip=is_public,
                                                                    display_name=name,
                                                                    skip_source_dest_check=src_dst_check,
                                                                    subnet_id=subnet_id)
+        if private_ip:
+            if private_ip.name:
+                secondary_vnic_details.display_name = private_ip.name
+            if private_ip.ip:
+                secondary_vnic_details.private_ip = private_ip.ip
         secondary_vnic_attach_details = oci.core.models.AttachVnicDetails(create_vnic_details=secondary_vnic_details,
                                                                           display_name=name,
                                                                           instance_id=instance_id)
@@ -156,7 +161,6 @@ class OciOps(object):
             instance_id = self.resource_config.remote_instance_id
             if not instance_id:
                 raise OciShellError("Failed to retrieve instance ocid")
-
         vnic_attachments = self.compute_ops.get_vnic_attachments(instance_id)
         if len(vnic_attachments) < 2:
             raise OciShellError("Unable to setas routing gateway: Only 1 vnic attached")
@@ -165,25 +169,23 @@ class OciOps(object):
         for vnic_attachment in vnic_attachments:
             vnic = self.network_ops.network_client.get_vnic(vnic_attachment.vnic_id)
             subnet = self.network_ops.get_subnet(vnic.data.subnet_id)
-            vcn_id = subnet.freeform_tags.get("VCN_ID")
-            vcn = self.network_ops.network_client.get_vcn(vcn_id)
+
             ip_id = self.network_ops.get_private_ip_object(subnet.id, vnic.data.private_ip)
             route_rule = oci.core.models.RouteRule(destination_type="CIDR_BLOCK",
                                                    network_entity_id=ip_id.id)
-            # oci.core.models.PrivateIp()
-            # oci.core.models.Vnic
+
             if not vnic.data.skip_source_dest_check:
                 self.network_ops.network_client_ops.update_vnic_and_wait_for_state(
                     vnic.data.id,
                     oci.core.models.UpdateVnicDetails(skip_source_dest_check=True),
                     wait_for_states=[oci.core.models.Vnic.LIFECYCLE_STATE_AVAILABLE])
-            routes_to_create[vcn] = route_rule
+            routes_to_create[subnet] = route_rule
 
-        for vcn in routes_to_create:
-            rule = routes_to_create.get(vcn)
-            route_table = vcn.data.default_route_table_id
-            for dst_vcn in routes_to_create:
-                if vcn == dst_vcn:
+        for subnet in routes_to_create:
+            rule = routes_to_create.get(subnet)
+            route_table = subnet.route_table_id
+            for dst_subnet in routes_to_create:
+                if subnet == dst_subnet:
                     continue
-                rule.destination = dst_vcn.data.cidr_block
+                rule.destination = dst_subnet.cidr_block
                 self.network_ops.update_route_table(route_table_id=route_table, route_rule=rule)
