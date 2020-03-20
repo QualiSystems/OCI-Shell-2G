@@ -23,12 +23,12 @@ class OciComputeOps(object):
 
     def change_instance_state(self, instance_id, new_state):
         instance = self.compute_client.get_instance(instance_id)
-        new_state = self._INSTANCE_STATE_MAP.get(new_state)
-        if instance.data and instance.data.lifecycle_state != new_state:
+        instance_state = self._INSTANCE_STATE_MAP.get(new_state)
+        if instance.data and instance.data.lifecycle_state != instance_state:
             self.compute_client_ops.instance_action_and_wait_for_state(
                 instance_id,
                 new_state,
-                [new_state]
+                [instance_state]
             )
 
     def launch_instance(self, app_name,
