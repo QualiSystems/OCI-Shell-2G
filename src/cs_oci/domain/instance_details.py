@@ -153,21 +153,23 @@ class InstanceDetails(object):
 
         subnet_actions = copy(self._subnet_actions)
         ip_address_list = copy(self.requested_private_ips)
-        subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
-        primary_ip = ip_address_list[0]
-        primary_subnet_action = next((s for s in subnet_actions
-                                      if s.actionParams.vnicName == primary_ip.name),
-                                     None)
-        if not primary_subnet_action:
+        primary_subnet_action = None
+        primary_ip = None
+        if ip_address_list:
+            subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
+            primary_ip = ip_address_list[0]
             primary_subnet_action = next((s for s in subnet_actions
-                                          if self.check_ip_in_subnet((
-                    s.actionParams.subnetServiceAttributes.get("Requested CIDR") or
-                    s.actionParams.subnetServiceAttributes.get("Allocated CIDR", "")),
-                primary_ip.ip)),
+                                          if s.actionParams.vnicName == primary_ip.name),
                                          None)
+            if not primary_subnet_action:
+                primary_subnet_action = next((s for s in subnet_actions
+                                              if self.check_ip_in_subnet((
+                        s.actionParams.subnetServiceAttributes.get("Requested CIDR") or
+                        s.actionParams.subnetServiceAttributes.get("Allocated CIDR", "")),
+                    primary_ip.ip)),
+                                             None)
 
         if not primary_subnet_action:
-            primary_ip = None
             primary_subnet_action = subnet_actions[0]
         self._primary_subnet_action = DeploySubnet(oci_ops=self._oci_ops,
                                                    action_id=primary_subnet_action.actionId,
