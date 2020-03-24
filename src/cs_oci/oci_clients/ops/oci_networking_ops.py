@@ -376,8 +376,7 @@ class OciNetworkOps(object):
         self.network_client_ops.update_security_list_and_wait_for_state(
             security_list_id,
             update_security_list_details,
-            [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE],
-            operation_kwargs={"retry_strategy": RETRY_STRATEGY}
+            [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE]
         )
 
     def update_route_table(self, route_table_id, route_rule, tag=None, append=True):

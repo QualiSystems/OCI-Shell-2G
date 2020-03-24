@@ -125,6 +125,7 @@ class OCIShellDriver(ResourceDriverInterface):
                 network_results.append(ConnectToSubnetActionResult(actionId=vm_instance_details.primary_subnet.action_id,
                                                                    interface=primary_interface_json))
 
+            subnet = oci_ops.network_ops.get_subnet(vm_instance_details.primary_subnet.oci_subnet.id)
             if vm_instance_details.inbound_ports:
                 new_security_list_item = oci_ops.network_ops.add_security_list(
                     vcn_id=vm_instance_details.vcn_id,
@@ -132,7 +133,7 @@ class OCIShellDriver(ResourceDriverInterface):
                     inbound_ports=vm_instance_details.inbound_ports)
 
                 if new_security_list_item:
-                    oci_ops.network_ops.update_subnet_security_lists(vm_instance_details.primary_subnet.oci_subnet,
+                    oci_ops.network_ops.update_subnet_security_lists(subnet,
                                                                      security_list_id=new_security_list_item.data.id)
 
             oci_ops.compute_ops.update_instance_name(instance_name, instance.id)
@@ -224,6 +225,34 @@ class OCIShellDriver(ResourceDriverInterface):
                                                   vnic.public_ip)
         except:
             pass
+
+    # def example_command(self, context, cancellation_context, ports):
+    #     """ Example for your remote custom command
+    #     :type context ResourceRemoteCommandContext
+    #     """
+    #
+    #     resource_config = OCIShellDriverResource.create_from_context(context)
+    #
+    #     To get logger:
+    #     with resource_config.get_logger() as logger:
+    #         logger.info("")
+    #
+    #     To get cloudshell api:
+    #     api = resource_config.api
+    #     resource_config.api.SetAttributeValue(app_name, "Public IP",
+    #                                               vnic.public_ip)
+    #     For Quali API
+    #     quali_api = resource_config.quali_api_helper
+    #
+    #     For OCI api calls:
+    #     oci_ops = OciOps(resource_config) # , example:
+    #
+    #     For compute operations:
+    #     oci_ops.compute_ops.compute_client or
+    #     oci_ops.compute_ops.compute_client_ops (for commands with wait functionality)
+    #
+    #     To get instance_id:
+    #     instance_id = resource_config.remote_instance_id
 
     def PowerOff(self, context, ports):
         """ Power Off the VM represented by the resource

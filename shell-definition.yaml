@@ -47,14 +47,6 @@ node_types:
         description: OCI Region of the Cloud Provider
         constraints:
         - valid_values: ["us-phoenix-1", "us-ashburn-2", "eu-frankfurt-1", "uk-london-1"]
-      Default Keypair:
-        type: string
-        default:
-        description: Name of default Keypair for new instances
-      Keypairs Path:
-        type: string
-        default:
-        description: Path to Local Keypair repository
     capabilities:
       concurrent_execution:
         type: cloudshell.capabilities.SupportConcurrentCommands
@@ -91,14 +83,6 @@ node_types:
             description: OCI Region of the Cloud Provider
             constraints:
             - valid_values: ["us-phoenix-1", "us-ashburn-2", "eu-frankfurt-1", "uk-london-1"]
-          Default Keypair:
-            type: string
-            default:
-            description: Name of default Keypair for new instances
-          Keypairs Path:
-            type: string
-            default:
-            description: Path to Local Keypair repository
           Networks in use:
             type: string
             default:
