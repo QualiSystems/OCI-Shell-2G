@@ -14,10 +14,12 @@ from cloudshell.cp.core.models import PrepareCloudInfraResult, CreateKeysActionR
 from cloudshell.shell.core.resource_driver_interface import ResourceDriverInterface
 from cloudshell.shell.core.session.logging_session import LoggingSessionContext
 
+from cs_oci.domain.data import PrepareSandboxInfraRequest
+from cs_oci.oci_flows.oci_networking_flow import OciNetworkInfraFlow
 from data_model import OCIShellDriverResource
-from instance_details import InstanceDetails
-from oci_ops import OciOps
-from shell_helper import set_command_result, create_vm_details, create_win_console_link, OciShellError
+from cs_oci.domain.instance_details import InstanceDetails
+from cs_oci.oci_clients.oci_ops import OciOps
+from cs_oci.helper.shell_helper import set_command_result, create_vm_details, create_win_console_link, OciShellError
 
 
 class OCIShellDriver(ResourceDriverInterface):
@@ -42,7 +44,8 @@ class OCIShellDriver(ResourceDriverInterface):
 
         actions = self.request_parser.convert_driver_request_to_actions(request)
         resource_config = OCIShellDriverResource.create_from_context(context)
-        # api.WriteMessageToReservationOutput(context.reservation.reservation_id, 'Request JSON: ' + request)
+        # resource_config.api.WriteMessageToReservationOutput(context.reservation.reservation_id,
+        #                                                     'Request JSON: ' + request)
         with LoggingSessionContext(context) as logger:
 
             deploy_action = None
@@ -84,39 +87,11 @@ class OCIShellDriver(ResourceDriverInterface):
 
         # Read deployment attributes
         app_name = deploy_action.actionParams.appName
-        vm_instance_details = InstanceDetails(deploy_action)
-
-        vcn = oci_ops.network_ops.get_vcn()
-        if not vcn:
-            raise OciShellError("Failed to locate appropriate VCN.")
-        subnets = oci_ops.network_ops.get_subnet(vcn_id=vcn.id)
-        subnet_dict = {k.id: k for k in subnets}
-        subnet = subnets[0]
-        subnet_id = subnet.id
-        primary_vnic_action = None
-        if subnet_actions:
-            subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
-            primary_vnic_action = subnet_actions[0]
-            primary_vnic0_action = next((
-                action for action in subnet_actions if action.actionParams.vnicName == "0"), None)
-            if primary_vnic0_action:
-                primary_vnic_action = primary_vnic0_action
-
-            secondary_subnet_actions = copy(subnet_actions)
-            secondary_subnet_actions.remove(primary_vnic_action)
-
-            subnet_id = primary_vnic_action.actionParams.subnetId
-            subnet = subnet_dict.get(subnet_id)
-            if not subnet:
-                raise OciShellError("Failed to retrieve subnet")
-
-        availability_domain = subnet.availability_domain
+        vm_instance_details = InstanceDetails(deploy_action, subnet_actions, oci_ops)
 
         ssh_pub_key = oci_ops.get_public_key()
 
-        instance = oci_ops.compute_ops.launch_instance(availability_domain=availability_domain,
-                                                       app_name=app_name,
-                                                       subnet_id=subnet_id,
+        instance = oci_ops.compute_ops.launch_instance(app_name=app_name,
                                                        ssh_pub_key=ssh_pub_key,
                                                        vm_details=vm_instance_details)
         instance_name = app_name + " " + instance.id.split(".")[-1][-10:]
@@ -137,22 +112,23 @@ class OCIShellDriver(ResourceDriverInterface):
             vnic_attachments = oci_ops.compute_ops.get_vnic_attachments(instance.id)
             vnic_attachment = next((v for v in vnic_attachments if v), None)
             if not vnic_attachment:
-                raise OciShellError("No vnic")
+                raise OciShellError("Unable to find primary instance vnic for app {}".format(instance_name))
             vnic_details = oci_ops.network_ops.network_client.get_vnic(vnic_attachment.vnic_id)
 
-            if primary_vnic_action:
+            if vm_instance_details.primary_subnet.action_id:
                 primary_interface_json = json.dumps({
                     'interface_id': vnic_details.data.id,
                     'IP': vnic_details.data.private_ip,
                     'Public IP': vnic_details.data.public_ip,
                     'MAC Address': vnic_details.data.mac_address
                 })
-                network_results.append(ConnectToSubnetActionResult(actionId=primary_vnic_action.actionId,
+                network_results.append(ConnectToSubnetActionResult(actionId=vm_instance_details.primary_subnet.action_id,
                                                                    interface=primary_interface_json))
 
+            subnet = oci_ops.network_ops.get_subnet(vm_instance_details.primary_subnet.oci_subnet.id)
             if vm_instance_details.inbound_ports:
                 new_security_list_item = oci_ops.network_ops.add_security_list(
-                    vcn_id=subnet.vcn_id,
+                    vcn_id=vm_instance_details.vcn_id,
                     security_list_name=instance_name,
                     inbound_ports=vm_instance_details.inbound_ports)
 
@@ -162,31 +138,35 @@ class OCIShellDriver(ResourceDriverInterface):
 
             oci_ops.compute_ops.update_instance_name(instance_name, instance.id)
             has_sec_public_ip = True
-            for vnic_action in secondary_subnet_actions:
-                vnic_public_ip = vnic_action.actionParams.isPublic
-                if vnic_public_ip:
-                    if has_sec_public_ip:
-                        vnic_public_ip = vnic_action.actionParams.isPublic
-                        has_sec_public_ip = False
-                    else:
-                        vnic_public_ip = False
-                        message = "Unable to find secondary subnet"
-                        secondary_subnet_name = subnet_dict.get(vnic_action.actionParams.subnetId)
-                        if secondary_subnet_name:
-                            message = "Could not add public IP to VNIC in subnet {}, " \
-                                      "to {}. Access possible" \
-                                      " using private IP only".format(secondary_subnet_name, instance_name)
-                            resource_config.api.WriteMessageToReservationOutput(resource_config.reservation_id,
-                                                                                "Warning, {}".format(message))
-                        logger.warning(message)
+            for vnic_action in vm_instance_details.secondary_subnets:
+                vnic_public_ip = vm_instance_details.public_ip
+                if vm_instance_details.public_ip:
+                    vnic_public_ip = vnic_action.is_public_subnet
+                    if vnic_public_ip:
+                        if has_sec_public_ip:
+                            vnic_public_ip = vnic_action.is_public_subnet
+                            has_sec_public_ip = False
+                        else:
+                            vnic_public_ip = False
+                            message = "Unable to find secondary subnet"
+                            secondary_subnet_name = oci_ops.network_ops.get_subnet(
+                                vnic_action.subnet_id).display_name
+                            if secondary_subnet_name:
+                                message = "Could not add public IP to VNIC in subnet {}, " \
+                                          "to {}. Access possible" \
+                                          " using private IP only.".format(secondary_subnet_name, instance_name)
+                                resource_config.api.WriteMessageToReservationOutput(resource_config.reservation_id,
+                                                                                    "Warning, {}".format(message))
+                            logger.warning(message)
 
-                interface_json = oci_ops.attach_secondary_vnics(name=vnic_action.actionId,
-                                                                subnet_id=vnic_action.actionParams.subnetId,
+                interface_json = oci_ops.attach_secondary_vnics(name=vnic_action.action_id,
+                                                                subnet_id=vnic_action.subnet_id,
                                                                 instance_id=instance.id,
                                                                 src_dst_check=vm_instance_details.skip_src_dst_check,
+                                                                private_ip=vnic_action.private_ip,
                                                                 is_public=vnic_public_ip)
                 network_results.append(
-                    ConnectToSubnetActionResult(actionId=vnic_action.actionId, interface=interface_json))
+                    ConnectToSubnetActionResult(actionId=vnic_action.action_id, interface=interface_json))
         except Exception as e:
             oci_ops.compute_ops.terminate_instance(instance.id)
             logger.exception("Failed to deploy {}:".format(app_name))
@@ -245,6 +225,34 @@ class OCIShellDriver(ResourceDriverInterface):
                                                   vnic.public_ip)
         except:
             pass
+
+    # def example_command(self, context, cancellation_context, ports):
+    #     """ Example for your remote custom command
+    #     :type context ResourceRemoteCommandContext
+    #     """
+    #
+    #     resource_config = OCIShellDriverResource.create_from_context(context)
+    #
+    #     To get logger:
+    #     with resource_config.get_logger() as logger:
+    #         logger.info("")
+    #
+    #     To get cloudshell api:
+    #     api = resource_config.api
+    #     resource_config.api.SetAttributeValue(app_name, "Public IP",
+    #                                               vnic.public_ip)
+    #     For Quali API
+    #     quali_api = resource_config.quali_api_helper
+    #
+    #     For OCI api calls:
+    #     oci_ops = OciOps(resource_config) # , example:
+    #
+    #     For compute operations:
+    #     oci_ops.compute_ops.compute_client or
+    #     oci_ops.compute_ops.compute_client_ops (for commands with wait functionality)
+    #
+    #     To get instance_id:
+    #     instance_id = resource_config.remote_instance_id
 
     def PowerOff(self, context, ports):
         """ Power Off the VM represented by the resource
@@ -394,6 +402,15 @@ class OCIShellDriver(ResourceDriverInterface):
 
             return "Console command is:\n{}\n".format(response)
 
+    def set_as_routing_gateway(self, context, ports):
+        """Generates a command for a console access to an instance"""
+        resource_config = OCIShellDriverResource.create_from_context(context)
+
+        oci_ops = OciOps(resource_config)
+
+        with LoggingSessionContext(context) as logger:
+            oci_ops.set_as_routing_gw()
+
     def _remote_save_snapshot(self, context, ports, snapshot_name):
         resource_config = OCIShellDriverResource.create_from_context(context)
         oci_ops = OciOps(resource_config)
@@ -428,81 +445,42 @@ class OCIShellDriver(ResourceDriverInterface):
 
     def PrepareSandboxInfra(self, context, request, cancellation_context):
         """
-        Called by CloudShell Orchestration during the Setup process in order to populate information about the networking environment used by the sandbox
-        :param context: ResourceRemoteCommandContext
+        Called by CloudShell Orchestration during the Setup process in order to populate information about the
+        networking environment used by the sandbox
+        :param context: ResourceCommandContext
         :param request: Actions to be performed to prepare the networking environment sent by CloudShell Server
         :param cancellation_context:
         :return:
         """
 
-        with LoggingSessionContext(context) as logger:
-
-            resource_config = OCIShellDriverResource.create_from_context(context)
-
+        resource_config = OCIShellDriverResource.create_from_context(context)
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config)
             # resource_config.api.WriteMessageToReservationOutput(context.reservation.reservation_id,
             #                                                     'Request JSON: ' + request)
-            oci_ops = OciOps(resource_config)
+            oci_networks = OciNetworkInfraFlow(oci_ops, logger, resource_config)
             json_request = json.loads(request)
+
             resource_config.api.WriteMessageToReservationOutput(resource_config.reservation_id,
                                                                 'Preparing Sandbox Connectivity...')
 
-            vcn_cidr = ""
-            keys_action_id = ""
-            vcn_action_id = ""
-            subnet_dict = {}
-            subnet_results = []
+        request_object = PrepareSandboxInfraRequest(resource_config, json_request)
+        request_object.parse_request()
+        try:
+            prepare_network_results = oci_networks.prepare_sandbox_infra(request_object)
 
-            for action in json_request["driverRequest"]["actions"]:
-                if action["type"] == "prepareCloudInfra":
-                    vcn_cidr = action.get("actionParams", {}).get("cidr", )
-                    vcn_action_id = action.get("actionId")
-                elif action["type"] == "prepareSubnet":
-                    subnet_action_id = action.get("actionId")
-                    subnet_cidr = action.get("actionParams", {}).get("cidr")
-                    default_alias = "Subnet {}".format(subnet_cidr)
-                    subnet_alias = action.get("actionParams", {}).get("alias", None)
-                    if not subnet_alias:
-                        subnet_alias = default_alias
-                    subnet_dict[subnet_action_id] = (subnet_cidr, subnet_alias)
-                if action["type"] == "createKeys":
-                    keys_action_id = action.get("actionId")
-
-            availability_domain = oci_ops.get_availability_domain_name()
-
-            vcn = oci_ops.network_ops.create_vcn(vcn_cidr)
-            prepare_network_result = PrepareCloudInfraResult(vcn_action_id)
-            prepare_network_result.securityGroupId = vcn.default_security_list_id
-            vcn_ocid = vcn.id
-            oci_ops.network_ops.configure_default_security_rule()
-
-            for action_id in subnet_dict:
-                subnet_cidr, subnet_alias = subnet_dict.get(action_id)
-                subnet = oci_ops.network_ops.create_subnet(subnet_cidr,
-                                                           subnet_alias,
-                                                           vcn_ocid,
-                                                           availability_domain)
-                subnet_result = PrepareSubnetActionResult()
-                subnet_result.actionId = action_id
-                subnet_result.subnetId = subnet.id
-                subnet_result.infoMessage = "Success"
-                subnet_results.append(subnet_result)
-
-        prepare_network_result.infoMessage = 'PrepareConnectivity finished successfully'
-
-        # Set Security Group
-        # subnet_info = self.network_client.get_subnet(subnet_cidr_ocid)
-        # prepare_network_result.securityGroupId = subnet_info.data.security_list_ids[0]
-
-        # Set VPC ID
-        prepare_network_result.networkId = vcn_ocid
+        except Exception as e:
+            oci_ops.network_ops.remove_vcn()
+            raise
 
         # Set Keypair
         private_key, public_key = oci_ops.generate_rsa_key_pair()
         oci_ops.upload_keypairs(private_key=private_key,
                                 public_key=public_key)
 
-        create_key_result = CreateKeysActionResult(actionId=keys_action_id, infoMessage='',
-                                                   accessKey=private_key)
+        prepare_network_results.append(CreateKeysActionResult(actionId=request_object.key_action_id,
+                                                              infoMessage='',
+                                                              accessKey=private_key))
 
         quali_api = resource_config.quali_api_helper
         quali_api.login()
@@ -510,11 +488,7 @@ class OCIShellDriver(ResourceDriverInterface):
                                              private_key,
                                              "{}.pem".format(resource_config.reservation_id))
 
-        results = [prepare_network_result, create_key_result]
-        results.extend(subnet_results)
-
-        result = DriverResponse(results).to_driver_response_json()
-        return result
+        return DriverResponse(prepare_network_results).to_driver_response_json()
 
     def CleanupSandboxInfra(self, context, request):
         """

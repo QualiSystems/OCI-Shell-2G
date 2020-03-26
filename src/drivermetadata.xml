@@ -28,6 +28,10 @@
         <Category Name="Power">
             <Command Description="" DisplayName="Power On" Name="PowerOn" Tags="power"/>
             <Command Description="" DisplayName="Power Off" Name="PowerOff" Tags="power"/>
+            <Command Description=""
+                 DisplayName="Set As Routing Gateway"
+                 Name="set_as_routing_gateway"
+                 Tags="remote_connectivity,allow_unreserved"/>
         </Category>
         <Category Name="Snapshot">
             <Command Description="" DisplayName="Save Snapshot" Name="remote_save_snapshot"
