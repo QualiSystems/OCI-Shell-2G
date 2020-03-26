@@ -98,11 +98,7 @@ class OCIShellDriverResource(object):
 
         endpoint = self._context.remote_endpoints[0].fullname.split('/')[0]
         parent_connected_resource = self.api.GetResourceDetails(endpoint)
-        try:
-            instance_id = [attribute.Value for attribute in parent_connected_resource.ResourceAttributes if
-                           attribute.Name == 'VM_UUID'][0]
-        except Exception:
-            instance_id = parent_connected_resource.VmDetails.UID
+        instance_id = parent_connected_resource.VmDetails.UID
         return instance_id
 
     @property
