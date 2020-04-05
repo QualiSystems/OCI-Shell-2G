@@ -104,8 +104,8 @@ class OCIShellDriver(ResourceDriverInterface):
             if credentials:
                 user, password = credentials
 
-            attributes.append(Attribute("User", user))
-            attributes.append(Attribute("Password", password))
+            attributes.append(Attribute(vm_instance_details.user_attr_name, user))
+            attributes.append(Attribute(vm_instance_details.password_attr_name, password))
 
             # set resource attributes (of the new resource) to use requested username and password
 
@@ -221,7 +221,9 @@ class OCIShellDriver(ResourceDriverInterface):
         vnic = oci_ops.get_primary_vnic(instance_id)
         resource_config.api.UpdateResourceAddress(name, vnic.private_ip)
         try:
-            resource_config.api.SetAttributeValue(name, "Public IP",
+            public_ip_attr_name = next((x for x in context.remote_endpoints[0].attributes.keys()
+                                        if x.lower().endswith(".public ip")), "Public IP")
+            resource_config.api.SetAttributeValue(name, public_ip_attr_name,
                                                   vnic.public_ip)
         except:
             pass

@@ -48,6 +48,8 @@ class InstanceDetails(object):
         self._primary_subnet_action = None
         self._secondary_subnet_actions = []
         self._vcn_id = None
+        self._user = None
+        self._password = None
 
     @property
     def vcn_id(self):
@@ -108,11 +110,23 @@ class InstanceDetails(object):
 
     @property
     def user(self):
-        return self._app_resource.get("User")
+        return self._app_resource.get(self.user_attr_name)
+
+    @property
+    def user_attr_name(self):
+        if not self._user:
+            self._user = next((x for x in self._app_resource if x.lower().endswith(".user")),
+                              "User")
+        return self._user
 
     @property
     def password(self):
-        return self._app_resource.get("Password")
+        return self._app_resource.get(self.password_attr_name)
+
+    @property
+    def password_attr_name(self):
+        return next((x for x in self._app_resource if x.lower().endswith(".password")),
+                    "Password")
 
     def _parse_inbound_ports(self):
         raw_data = self._deploy_attribs.get("{}.Inbound Ports".format(self._deployment_path), "")
@@ -137,7 +151,7 @@ class InstanceDetails(object):
             else:
                 subnet_id = self._subnet_actions[0].actionParams.subnetId
                 cidr = self._subnet_actions[0].actionParams.subnetServiceAttributes.get("Requested CIDR") or \
-                    self._subnet_actions[0].actionParams.subnetServiceAttributes.get("Allocated CIDR")
+                       self._subnet_actions[0].actionParams.subnetServiceAttributes.get("Allocated CIDR")
                 action_id = self._subnet_actions[0].actionId
 
             self._primary_subnet_action = DeploySubnet(oci_ops=self._oci_ops,
