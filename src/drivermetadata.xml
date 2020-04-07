@@ -24,6 +24,11 @@
             <Command Description="" DisplayName="Get VM Uuid" Name="get_vm_uuid" Tags="allow_shared"/>
             <Command Description="" DisplayName="Get VmDetails" EnableCancellation="true" Name="GetVmDetails"
                      Tags="allow_unreserved"/>
+            <Command Description="Create Image of instance and return the new image ocid."
+                     DisplayName="Create New Image"
+                     Name="SaveApp"
+                     Tags="remote_connectivity"
+                     Visibility="AdminOnly"/>
         </Category>
         <Category Name="Power">
             <Command Description="" DisplayName="Power On" Name="PowerOn" Tags="power"/>
