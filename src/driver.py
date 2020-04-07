@@ -1,5 +1,6 @@
 from copy import copy
 
+import re
 import time
 import json
 import jsonpickle
@@ -514,3 +515,10 @@ class OCIShellDriver(ResourceDriverInterface):
         cleanup_result = ActionResultBase("cleanupNetwork", cleanup_action_id)
 
         return set_command_result({'driverResponse': {'actionResults': [cleanup_result]}})
+
+    def SaveApp(self, context, ports):
+        resource_config = OCIShellDriverResource.create_from_context(context)
+        oci_ops = OciOps(resource_config)
+
+        return oci_ops.compute_ops.create_image_from_instance(resource_config.remote_instance_id,
+                                                              resource_config.compartment_ocid)
