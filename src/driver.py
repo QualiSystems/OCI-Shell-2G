@@ -520,5 +520,5 @@ class OCIShellDriver(ResourceDriverInterface):
         resource_config = OCIShellDriverResource.create_from_context(context)
         oci_ops = OciOps(resource_config)
 
-        return oci_ops.compute_ops.create_image_from_instance(resource_config.remote_instance_id,
-                                                              resource_config.compartment_ocid)
+        return json.dumps(oci_ops.compute_ops.create_image_from_instance(resource_config.remote_instance_id,
+                                                                         resource_config.compartment_ocid))

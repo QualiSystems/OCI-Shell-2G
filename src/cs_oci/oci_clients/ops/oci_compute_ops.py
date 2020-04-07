@@ -135,6 +135,6 @@ class OciComputeOps(object):
             wait_for_states=[oci.core.models.Image.LIFECYCLE_STATE_AVAILABLE],
             operation_kwargs={"retry_strategy": RETRY_STRATEGY})
         if create_image_response.data:
-            return create_image_response.data.id
+            return {"OCI Shell.OCI VM from Image.Image ID": create_image_response.data.id}
         else:
             raise RuntimeError("Timeout when waiting for new Image to reach state 'Available'")
