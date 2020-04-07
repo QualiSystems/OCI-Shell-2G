@@ -124,3 +124,17 @@ class OciComputeOps(object):
                 create_console,
                 wait_for_states=[oci.core.models.InstanceConsoleConnection.LIFECYCLE_STATE_ACTIVE])
         return result
+
+    def create_image_from_instance(self, instance_ocid, compartment_ocid):
+        new_image_details = oci.core.models.CreateImageDetails()
+        new_image_details.compartment_id = compartment_ocid
+        new_image_details.instance_id = instance_ocid
+
+        create_image_response = self.compute_client_ops.create_image_and_wait_for_state(
+            new_image_details,
+            wait_for_states=[oci.core.models.Image.LIFECYCLE_STATE_AVAILABLE],
+            operation_kwargs={"retry_strategy": RETRY_STRATEGY})
+        if create_image_response.data:
+            return create_image_response.data.id
+        else:
+            raise RuntimeError("Timeout when waiting for new Image to reach state 'Available'")
