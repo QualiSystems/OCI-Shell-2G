@@ -1,6 +1,5 @@
 from copy import copy
 
-import re
 import time
 import json
 import jsonpickle
