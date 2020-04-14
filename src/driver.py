@@ -515,7 +515,7 @@ class OCIShellDriver(ResourceDriverInterface):
 
         return set_command_result({'driverResponse': {'actionResults': [cleanup_result]}})
 
-    def SaveApp(self, context, ports):
+    def save_app(self, context, ports):
         resource_config = OCIShellDriverResource.create_from_context(context)
         oci_ops = OciOps(resource_config)
 

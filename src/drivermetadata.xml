@@ -26,7 +26,7 @@
                      Tags="allow_unreserved"/>
             <Command Description="Create Image of instance and return the new image ocid."
                      DisplayName="Create New Image"
-                     Name="SaveApp"
+                     Name="save_app"
                      Tags="remote_connectivity"
                      Visibility="AdminOnly"/>
         </Category>
