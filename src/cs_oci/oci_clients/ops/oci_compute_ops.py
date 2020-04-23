@@ -1,3 +1,5 @@
+import base64
+
 import oci
 from oci import pagination
 
@@ -63,7 +65,15 @@ class OciComputeOps(object):
             new_inst_details.create_vnic_details.private_ip = vm_details.primary_subnet.private_ip.ip
         new_inst_details.shape = vm_details.vm_shape
         new_inst_details.image_id = vm_details.image_id
-        new_inst_details.metadata = {'ssh_authorized_keys': ssh_pub_key}
+        new_inst_details.metadata = {"ssh_authorized_keys": ssh_pub_key}
+        if vm_details.cloud_init_params:
+            data = vm_details.cloud_init_params
+            try:
+                with open(vm_details.cloud_init_params, 'rb+') as script:
+                    data = script.read()
+            except IOError:
+                pass
+            new_inst_details.metadata["user_data"] = base64.b64encode(data.decode('string_escape'))
 
         # Start the VM
 

@@ -1,3 +1,4 @@
+import json
 import re
 from copy import copy
 
@@ -72,6 +73,10 @@ class InstanceDetails(object):
         return public_ip_str.lower() == "true"
 
     @property
+    def cloud_init_params(self):
+        return self._deploy_attribs.get("{}.Cloud Init Script Data".format(self._deployment_path), "")
+
+    @property
     def requested_private_ips(self):
         result = []
         private_ips_str = self._deploy_attribs.get("{}.Requested Private IP".format(self._deployment_path), "")
@@ -117,6 +122,13 @@ class InstanceDetails(object):
         if not self._user:
             self._user = next((x for x in self._app_resource if x.lower().endswith(".user")),
                               "User")
+        return self._user
+
+    @property
+    def public_ip_attr_name(self):
+        if not self._user:
+            self._user = next((x for x in self._app_resource if x.lower().endswith(".public ip")),
+                              "Public IP")
         return self._user
 
     @property

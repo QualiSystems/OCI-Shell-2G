@@ -41,12 +41,27 @@ node_types:
         type: string
         default: 
         description: OCID of the Default Compartment for VM deployments
+      Availability Domain:
+        type: string
+        default:
+        description: "Leave empty for automatic assignment,
+        or Index of the required Availability Domain (1, 2 or 3)
+        or exact name.
+        For example: '1' or 'GBAI:UK-LONDON-1-AD-1'"
       Region:
         type: string
         default: 
         description: OCI Region of the Cloud Provider
         constraints:
         - valid_values: ["us-phoenix-1", "us-ashburn-2", "eu-frankfurt-1", "uk-london-1"]
+#      Default Keypair:
+#        type: string
+#        default:
+#        description: Name of default Keypair for new instances
+#      Keypairs Path:
+#        type: string
+#        default:
+#        description: Path to Local Keypair repository
     capabilities:
       concurrent_execution:
         type: cloudshell.capabilities.SupportConcurrentCommands
@@ -83,10 +98,23 @@ node_types:
             description: OCI Region of the Cloud Provider
             constraints:
             - valid_values: ["us-phoenix-1", "us-ashburn-2", "eu-frankfurt-1", "uk-london-1"]
+          Availability Domain:
+            type: string
+            default:
+            description: "Index of required Availability Domain or exact name.
+            For example: '1' or 'GBAI:UK-LONDON-1-AD-1'"
           Networks in use:
             type: string
             default:
             description: CIDRs to skip during Sandbox reservation
+#          Default Keypair:
+#            type: string
+#            default:
+#            description: Name of default Keypair for new instances
+#          Keypairs Path:
+#            type: string
+#            default:
+#            description: Path to Local Keypair repository
           enable_auto_discovery:
             type: boolean
             default: true

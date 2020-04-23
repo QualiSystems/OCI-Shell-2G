@@ -146,6 +146,7 @@ class OciNetworkOps(object):
                     cidr_block=vcn_cidr,
                     display_name=name,
                     freeform_tags=self._resource_config.tags,
+                    # dns_label="{}.oraclevcn.com".format(name),
                     compartment_id=self._resource_config.compartment_ocid
                 ),
                 [oci.core.models.Vcn.LIFECYCLE_STATE_AVAILABLE],

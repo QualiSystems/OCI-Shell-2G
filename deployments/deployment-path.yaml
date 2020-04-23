@@ -26,7 +26,10 @@ node_types:
         default: VM.Standard1.1
         description: The type of OCI Instance to deploy - see https://cloud.oracle.com/compute/pricing
         constraints:
-          -  valid_values: [VM.Standard1.1, VM.Standard1.2, VM.Standard1.4, VM.Standard2.1, VM.Standard2.2, VM.Standard2.4]
+          -  valid_values: [VM.Standard1.1, VM.Standard1.2, VM.Standard1.4, VM.Standard2.1, VM.Standard2.2,
+          VM.Standard2.4, VM.StandardB1.1, VM.StandardB1.2, VM.StandardB1.4, VMStandardB2.1, VMStandardB2.2,
+          VM.StandardB2.4, VM.StandardE1.1, VM.StandardE1.2, VM.StandardE1.4, VMStandardE2.1, VMStandardE2.2,
+                            VMStandardE2.4]
         tags: [user_input,editable_only_in_app_template]
       Add Public IP:
         type: boolean
@@ -49,6 +52,12 @@ node_types:
         type: boolean
         default: False
         description: Enable or disable source/destination check on a vnic.
+        tags: [user_input]
+      Cloud Init Script Data:
+        type: string
+        default:
+        description: "This Attribute acts in the same way as CLOUD-INIT SCRIPT in OCI Console.
+        Path to a script file, or text with lines separated by \n. i.e. #!/bin/bash -xe\nyum update -y"
         tags: [user_input]
     artifacts:
       icon:

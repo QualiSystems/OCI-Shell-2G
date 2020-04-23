@@ -91,6 +91,16 @@ class OciOps(object):
             self.identity_client.list_availability_domains,
             self.resource_config.compartment_ocid
         )
+        if self.resource_config.availability_domain:
+            if any(x for x in list_availability_domains_response.data
+                   if x.name == self.resource_config.availability_domain):
+                return self.resource_config.availability_domain
+            try:
+                index = int(self.resource_config.availability_domain) - 1
+                return list_availability_domains_response.data[index].name
+            except (ValueError, IndexError) as e:
+                pass
+                # Todo add logging here
         return list_availability_domains_response.data[0].name
 
     def create_ssh_keys_storage(self):

@@ -8,8 +8,9 @@ from cloudshell.shell.core.driver_context import AutoLoadDetails, ResourceRemote
 
 from cloudshell.cp.core import DriverRequestParser
 from cloudshell.cp.core.models import DeployApp, DeployAppResult, DriverResponse, Attribute, ConnectSubnet, \
-    PrepareSubnetActionResult, ConnectToSubnetActionResult
-from cloudshell.cp.core.models import PrepareCloudInfraResult, CreateKeysActionResult, ActionResultBase
+    ConnectToSubnetActionResult
+from cloudshell.cp.core.models import CreateKeysActionResult, ActionResultBase
+
 
 from cloudshell.shell.core.resource_driver_interface import ResourceDriverInterface
 from cloudshell.shell.core.session.logging_session import LoggingSessionContext
@@ -122,6 +123,7 @@ class OCIShellDriver(ResourceDriverInterface):
                     'Public IP': vnic_details.data.public_ip,
                     'MAC Address': vnic_details.data.mac_address
                 })
+                attributes.append(Attribute(vm_instance_details.public_ip_attr_name, vnic_details.data.public_ip))
                 network_results.append(ConnectToSubnetActionResult(actionId=vm_instance_details.primary_subnet.action_id,
                                                                    interface=primary_interface_json))
 
@@ -225,6 +227,7 @@ class OCIShellDriver(ResourceDriverInterface):
                                         if x.lower().endswith(".public ip")), "Public IP")
             resource_config.api.SetAttributeValue(name, public_ip_attr_name,
                                                   vnic.public_ip)
+            open()
         except:
             pass
 
