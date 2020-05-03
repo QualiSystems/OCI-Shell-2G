@@ -50,6 +50,7 @@ class InstanceDetails(object):
         self._secondary_subnet_actions = []
         self._vcn_id = None
         self._user = None
+        self._public_ip = None
         self._password = None
 
     @property
@@ -120,16 +121,18 @@ class InstanceDetails(object):
     @property
     def user_attr_name(self):
         if not self._user:
-            self._user = next((x for x in self._app_resource if x.lower().endswith(".user")),
+            self._user = next((x for x in self._app_resource
+                               if x.lower().endswith(".user") or x.lower() == "user"),
                               "User")
         return self._user
 
     @property
     def public_ip_attr_name(self):
-        if not self._user:
-            self._user = next((x for x in self._app_resource if x.lower().endswith(".public ip")),
+        if not self._public_ip:
+            self._public_ip = next((x for x in self._app_resource
+                               if x.lower().endswith(".public ip") or x.lower() == "public ip"),
                               "Public IP")
-        return self._user
+        return self._public_ip
 
     @property
     def password(self):
@@ -137,7 +140,8 @@ class InstanceDetails(object):
 
     @property
     def password_attr_name(self):
-        return next((x for x in self._app_resource if x.lower().endswith(".password")),
+        return next((x for x in self._app_resource
+                     if x.lower().endswith(".password") or x.lower() == "password"),
                     "Password")
 
     def _parse_inbound_ports(self):
