@@ -100,13 +100,16 @@ class OCIShellDriver(ResourceDriverInterface):
 
         try:
             user = vm_instance_details.user
-            password = resource_config.api.DecryptPassword(vm_instance_details.password).Value
+            password = ""
+            if vm_instance_details.password:
+                password = resource_config.api.DecryptPassword(vm_instance_details.password).Value
             credentials = oci_ops.compute_ops.get_windows_credentials(instance.id)
             if credentials:
                 user, password = credentials
 
             attributes.append(Attribute(vm_instance_details.user_attr_name, user))
-            attributes.append(Attribute(vm_instance_details.password_attr_name, password))
+            if password:
+                attributes.append(Attribute(vm_instance_details.password_attr_name, password))
 
             # set resource attributes (of the new resource) to use requested username and password
 
@@ -126,8 +129,7 @@ class OCIShellDriver(ResourceDriverInterface):
                 attributes.append(Attribute(vm_instance_details.public_ip_attr_name, vnic_details.data.public_ip))
                 network_results.append(ConnectToSubnetActionResult(actionId=vm_instance_details.primary_subnet.action_id,
                                                                    interface=primary_interface_json))
-
-            subnet = oci_ops.network_ops.get_subnet(vm_instance_details.primary_subnet.oci_subnet.id)
+            new_security_list_item = None
             if vm_instance_details.inbound_ports:
                 new_security_list_item = oci_ops.network_ops.add_security_list(
                     vcn_id=vm_instance_details.vcn_id,
@@ -135,7 +137,7 @@ class OCIShellDriver(ResourceDriverInterface):
                     inbound_ports=vm_instance_details.inbound_ports)
 
                 if new_security_list_item:
-                    oci_ops.network_ops.update_subnet_security_lists(subnet,
+                    oci_ops.network_ops.update_subnet_security_lists(vm_instance_details.primary_subnet.oci_subnet,
                                                                      security_list_id=new_security_list_item.data.id)
 
             oci_ops.compute_ops.update_instance_name(instance_name, instance.id)
@@ -144,6 +146,7 @@ class OCIShellDriver(ResourceDriverInterface):
                 vnic_public_ip = vm_instance_details.public_ip
                 if vm_instance_details.public_ip:
                     vnic_public_ip = vnic_action.is_public_subnet
+
                     if vnic_public_ip:
                         if has_sec_public_ip:
                             vnic_public_ip = vnic_action.is_public_subnet
@@ -167,12 +170,15 @@ class OCIShellDriver(ResourceDriverInterface):
                                                                 src_dst_check=vm_instance_details.skip_src_dst_check,
                                                                 private_ip=vnic_action.private_ip,
                                                                 is_public=vnic_public_ip)
+                if new_security_list_item:
+                    oci_ops.network_ops.update_subnet_security_lists(vnic_action.oci_subnet,
+                                                                     security_list_id=new_security_list_item.data.id)
                 network_results.append(
                     ConnectToSubnetActionResult(actionId=vnic_action.action_id, interface=interface_json))
         except Exception as e:
             oci_ops.compute_ops.terminate_instance(instance.id)
             logger.exception("Failed to deploy {}:".format(app_name))
-            raise OciShellError("Failed to deploy {} reason: {}".format(app_name, e.message))
+            raise OciShellError("Failed to deploy {} reason: {}".format(app_name, e.args))
 
         deploy_result = DeployAppResult(actionId=deploy_action.actionId,
                                         infoMessage="Deployment Completed Successfully",
