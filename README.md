@@ -150,7 +150,9 @@ You can also modify existing resources, see [Managing Resources in the Inventory
      
   3. From the list, select **OCI Shell 2G**.
   
-  4. Enter the following attributes with data from step 1:
+  4. Click **Create**.
+  
+  5. In the **Resource** dialog box, enter the following attributes with data from step 1:
         - **API User Name** - Paste here your User OCID
         - **API Key File Path** Path to generated pem private key file
         - **API Key Passphrase** Key passphrase, leave empty if no password created
@@ -160,11 +162,7 @@ You can also modify existing resources, see [Managing Resources in the Inventory
         - **Availability Domain** Availability Domain full name or number (1, 2, 3)
         - **Region** Account Region
   
-  5. Click **Create**.
-  
-  6. In the **Resource** dialog box, enter the device's settings, see [OCI Cloud Provider Shell Attributes](#oci-cloud-provider-attributes)
-  
-  7. Click **Continue**.
+  6. Click **Continue**.
 
 CloudShell validates the device’s settings and updates the new resource with the device’s structure.
 
