@@ -63,12 +63,14 @@ The following table describes attributes that are unique to this shell and are n
 
 |Attribute Name|Data Type|Description|
 |:---|:---|:---|
-|API User|string|Username with administrative privilages|
-|API Password|Password|The password is required to use OCI API|
-|Management Network|string|Management network name (default is flat)|
-|STD API Port|integer|STD API Port (default is 19399)|
-|UWM API Port|integer|UWM API Port (default is 193400)|
-|Configuration Templates Location|string|Full path where device configuration templates stored|
+|API User Name|string|OCI User OCID|
+|API Key File Path|string|Path to generated PEM Private Key file|
+|API Key Passphrase|Password|Key passphrase, leave empty if no password created|
+|API Key File Fingerprint|string|API Private Key fingerprint|
+|Tenant ID|string|OCI Tenant OCID|
+|Compartment OCID|string|OCI Compartment OCID|
+|Availability Domain|string|Full Availability Domain name or number (1, 2, 3)|
+|Region|string|Account Region|
 
 ### Automation
 This section describes the automation (driver) associated with the data model. The shell’s driver is provided as part of the shell package. There are two types of automation processes, Autoload and Resource. Autoload is executed when creating the resource in the **Inventory** dashboard.
@@ -151,7 +153,7 @@ You can also modify existing resources, see [Managing Resources in the Inventory
   4. Enter the following attributes with data from step 1:
         - **API User Name** - Paste here your User OCID
         - **API Key File Path** Path to generated pem private key file
-        - **API Key Passphrase** key passphrase, leave empty if no password created
+        - **API Key Passphrase** Key passphrase, leave empty if no password created
         - **API Key File Fingerprint** key file fingerprint, see step 1 for reference
         - **Tenant ID** Tenant OCID, see step 1 for reference
         - **Compartment OCID** Compartment OCID, see step 1 for reference
