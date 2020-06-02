@@ -12,7 +12,7 @@ class OCIShellDriverResource(object):
         self.attributes = {}
         self.resources = {}
         self._context = context
-        self._cloudshell_model_name = 'OCI Shell'
+        self._cs_model_name = 'OCI Shell 2G'
         self._name = name
 
     @classmethod
@@ -106,138 +106,88 @@ class OCIShellDriverResource(object):
         """
         :rtype: str
         """
-        return self.attributes['OCI Shell.API User ID'] if 'OCI Shell.API User ID' in self.attributes else None
-
-    @api_user_id.setter
-    def api_user_id(self, value):
-        """
-        User ID for OCI API
-        :type value: str
-        """
-        self.attributes['OCI Shell.API User ID'] = value
+        return self.attributes.get('{}.API User ID'.format(self._cs_model_name))
 
     @property
     def api_key_file_path(self):
         """
         :rtype: str
         """
-        return self.attributes[
-            'OCI Shell.API Key File Path'] if 'OCI Shell.API Key File Path' in self.attributes else None
-
-    @api_key_file_path.setter
-    def api_key_file_path(self, value):
-        """
-        Full path (including file name) to the API Private Key
-        :type value: str
-        """
-        self.attributes['OCI Shell.API Key File Path'] = value
+        return self.attributes.get('{}.API Key File Path'.format(self._cs_model_name))
 
     @property
     def api_key_passphrase(self):
         """
         :rtype: str
         """
-        return self.attributes[
-            'OCI Shell.API Key Passphrase'] if 'OCI Shell.API Key Passphrase' in self.attributes else None
 
-    @api_key_passphrase.setter
-    def api_key_passphrase(self, value):
-        """
-        API Private Key passphrase
-        :type value: str
-        """
-        self.attributes['OCI Shell.API Key Passphrase'] = value
+        password = self.attributes.get('{}.API Key Passphrase'.format(self._cs_model_name))
+        if password:
+            password = self.api.DecryptPassword(password).Value
+        return password
 
     @property
     def api_key_file_fingerprint(self):
         """
         :rtype: str
         """
-        return self.attributes[
-            'OCI Shell.API Key File Fingerprint'] if 'OCI Shell.API Key File Fingerprint' in self.attributes else None
-
-    @api_key_file_fingerprint.setter
-    def api_key_file_fingerprint(self, value):
-        """
-        Fingerprint for the API Public key
-        :type value: str
-        """
-        self.attributes['OCI Shell.API Key File Fingerprint'] = value
+        return self.attributes.get('{}.API Key File Fingerprint'.format(self._cs_model_name))
 
     @property
     def tenant_id(self):
         """
         :rtype: str
         """
-        return self.attributes['OCI Shell.Tenant ID'] if 'OCI Shell.Tenant ID' in self.attributes else None
-
-    @tenant_id.setter
-    def tenant_id(self, value):
-        """
-        OCID of the OCI Tenant to deploy on
-        :type value: str
-        """
-        self.attributes['OCI Shell.Tenant ID'] = value
+        return self.attributes.get('{}.Tenant ID'.format(self._cs_model_name))
 
     @property
     def default_subnet(self):
         """
         :rtype: str
         """
-        return self.attributes['OCI Shell.Default Subnet'] if 'OCI Shell.Default Subnet' in self.attributes else None
-
-    @default_subnet.setter
-    def default_subnet(self, value):
-        """
-        OCID of the Default Subnet for VM deployments
-        :type value: str
-        """
-        self.attributes['OCI Shell.Default Subnet'] = value
+        return self.attributes.get('{}.Default Subnet'.format(self._cs_model_name))
 
     @property
     def availability_domain(self):
         """
         :rtype: str
         """
-        return self.attributes[
-            'OCI Shell.Availability Domain'] \
-            if 'OCI Shell.Availability Domain' in self.attributes else None
+        return self.attributes.get('{}.Availability Domain'.format(self._cs_model_name))
 
     @property
     def compartment_ocid(self):
         """
         :rtype: str
         """
-        return self.attributes[
-            'OCI Shell.Compartment OCID'] if 'OCI Shell.Compartment OCID' in self.attributes else None
+        return self.attributes.get('{}.Compartment OCID'.format(self._cs_model_name))
 
     @property
     def region(self):
         """
         :rtype: str
         """
-        return self.attributes['OCI Shell.Region'] if 'OCI Shell.Region' in self.attributes else None
+        return self.attributes.get('{}.Region'.format(self._cs_model_name))
 
     @property
     def networking_type(self):
         """
         :rtype: str
         """
-        return self.attributes['OCI Shell.Networking type'] if 'OCI Shell.Networking type' in self.attributes else None
+        return self.attributes.get('{}.Networking type'.format(self._cs_model_name))
 
     @property
     def networks_in_use(self):
         """
         :rtype: str
         """
-        return self.attributes['OCI Shell.Networks in use'] if 'OCI Shell.Networks in use' in self.attributes else None
+        return self.attributes.get('{}.Networks in use'.format(self._cs_model_name))
 
     @property
     def vlan_type(self):
         """
         :rtype: str
         """
-        return self.attributes['OCI Shell.VLAN Type'] if 'OCI Shell.VLAN Type' in self.attributes else None
+        return self.attributes.get('{}.VLAN Type'.format(self._cs_model_name))
 
     @property
     def name(self):
@@ -251,4 +201,4 @@ class OCIShellDriverResource(object):
         """
         :rtype: str
         """
-        return self._cloudshell_model_name
+        return self._cs_model_name
