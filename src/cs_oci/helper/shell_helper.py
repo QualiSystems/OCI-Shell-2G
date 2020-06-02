@@ -4,11 +4,14 @@ import jsonpickle
 from cloudshell.cp.core.models import VmDetailsProperty, VmDetailsNetworkInterface, VmDetailsData
 from oci.retry import RetryStrategyBuilder
 
-
 RETRY_STRATEGY = RetryStrategyBuilder().add_max_attempts(10) \
-            .add_total_elapsed_time(600) \
-            .add_service_error_check() \
-            .get_retry_strategy()
+    .add_total_elapsed_time(600) \
+    .add_service_error_check(service_error_retry_on_any_5xx=True,
+                             service_error_retry_config={
+                                 400: ['QuotaExceeded', 'LimitExceeded'],
+                                 429: []
+                             }) \
+    .get_retry_strategy()
 
 
 class OciShellError(Exception):
@@ -16,14 +19,14 @@ class OciShellError(Exception):
 
 
 WIN_SSH_LINK_TEMPLATE = "Start-Job {{ Echo N | plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
-                       "-N -ssh -P 443 -l {console_conn_id} -L {port1}:{instance_id}:{port2} {console_conn_endpoint} " \
-                       "}}; sleep 5; plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
-                       "-P {port1} localhost -l {instance_id}"
+                        "-N -ssh -P 443 -l {console_conn_id} -L {port1}:{instance_id}:{port2} {console_conn_endpoint} " \
+                        "}}; sleep 5; plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
+                        "-P {port1} localhost -l {instance_id}"
 
 WIN_VNC_LINK_TEMPLATE = "Start-Job {{ Echo N | plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
-                       "-N -ssh -P 443 -l {console_conn_id} -L {port1}:{instance_id}:{port1} {console_conn_endpoint} " \
-                       "}}; sleep 5; plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
-                       "-N -L {port2}:localhost:{port2} -P {port1} localhost -l {instance_id}"
+                        "-N -ssh -P 443 -l {console_conn_id} -L {port1}:{instance_id}:{port1} {console_conn_endpoint} " \
+                        "}}; sleep 5; plink.exe -i $env:homedrive$env:homepath\oci\console.ppk " \
+                        "-N -L {port2}:localhost:{port2} -P {port1} localhost -l {instance_id}"
 
 
 def create_win_console_link(instance_id, console_id, region, linux_ssh_link="", linux_vnc_link=""):

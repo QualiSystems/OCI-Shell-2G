@@ -27,9 +27,8 @@ node_types:
         description: The type of OCI Instance to deploy - see https://cloud.oracle.com/compute/pricing
         constraints:
           -  valid_values: [VM.Standard1.1, VM.Standard1.2, VM.Standard1.4, VM.Standard2.1, VM.Standard2.2,
-          VM.Standard2.4, VM.StandardB1.1, VM.StandardB1.2, VM.StandardB1.4, VMStandardB2.1, VMStandardB2.2,
-          VM.StandardB2.4, VM.StandardE1.1, VM.StandardE1.2, VM.StandardE1.4, VMStandardE2.1, VMStandardE2.2,
-                            VMStandardE2.4]
+          VM.Standard2.4, VM.Standard2.8, VM.Standard.B1.1, VM.Standard.B1.2, VM.Standard.B1.4,  VM.Standard.B1.8, VMStandard.E2.1, VMStandard.E2.2,
+                            VMStandard.E2.4, VMStandard.E2.8, VMStandard.E2.4]
         tags: [user_input,editable_only_in_app_template]
       Add Public IP:
         type: boolean

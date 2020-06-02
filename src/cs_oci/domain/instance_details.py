@@ -121,7 +121,8 @@ class InstanceDetails(object):
     @property
     def user_attr_name(self):
         if not self._user:
-            self._user = next((x for x in self._app_resource if x.lower().endswith(".user")),
+            self._user = next((x for x in self._app_resource
+                               if x.lower().endswith(".user") or x.lower() == "user"),
                               "User")
         return self._user
 
@@ -138,7 +139,8 @@ class InstanceDetails(object):
 
     @property
     def password_attr_name(self):
-        return next((x for x in self._app_resource if x.lower().endswith(".password")),
+        return next((x for x in self._app_resource
+                     if x.lower().endswith(".password") or x.lower() == "password"),
                     "Password")
 
     def _parse_inbound_ports(self):
