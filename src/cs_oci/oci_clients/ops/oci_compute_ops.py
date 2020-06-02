@@ -21,7 +21,6 @@ class OciComputeOps(object):
         self.resource_config = resource_config
         self.compute_client = oci.core.ComputeClient(config, retry_strategy=RETRY_STRATEGY)
         self.compute_client_ops = oci.core.ComputeClientCompositeOperations(self.compute_client)
-        pass
 
     def change_instance_state(self, instance_id, new_state):
         instance = self.compute_client.get_instance(instance_id)

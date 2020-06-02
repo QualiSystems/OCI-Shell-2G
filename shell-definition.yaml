@@ -1,7 +1,7 @@
 tosca_definitions_version: tosca_simple_yaml_1_0
 
 metadata:
-  template_name: OCI Shell
+  template_name: OCI Shell 2G
   template_author: Quali
   template_version: 1.1.2
   template_icon: OCI.png
@@ -14,7 +14,7 @@ imports:
   
   
 node_types:
- vendor.resource.OCI Shell:
+ vendor.resource.OCI Shell 2G:
     derived_from: cloudshell.nodes.CustomCloudProvider
     properties:
       API User ID:
@@ -26,7 +26,7 @@ node_types:
         default: 
         description: Full path (including file name) to the API Pem Key
       API Key Passphrase:
-        type: string
+        type: cloudshell.datatypes.Password
         default:
         description: API Pem Key passphrase
       API Key File Fingerprint:

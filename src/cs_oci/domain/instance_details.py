@@ -50,6 +50,7 @@ class InstanceDetails(object):
         self._secondary_subnet_actions = []
         self._vcn_id = None
         self._user = None
+        self._public_ip_attr = None
         self._password = None
 
     @property
@@ -126,10 +127,10 @@ class InstanceDetails(object):
 
     @property
     def public_ip_attr_name(self):
-        if not self._user:
-            self._user = next((x for x in self._app_resource if x.lower().endswith(".public ip")),
+        if not self._public_ip_attr:
+            self._public_ip_attr = next((x for x in self._app_resource if x.lower().endswith(".public ip")),
                               "Public IP")
-        return self._user
+        return self._public_ip_attr
 
     @property
     def password(self):
