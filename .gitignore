@@ -130,3 +130,4 @@ dmypy.json
 /.idea
 /src/test_oci.py
 /src/test_jsons_bkp.py
+/src/deps

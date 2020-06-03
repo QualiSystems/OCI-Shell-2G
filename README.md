@@ -7,7 +7,7 @@ Virtual Internet Routing Lab cloud provider
 
 Release date: May 2020
 
-`Shell version: 1.0.0`
+`Shell version: 1.1.3`
 
 `Document version: 1.0`
 
@@ -26,7 +26,7 @@ Release date: May 2020
 A shell integrates a device model, application or other technology with CloudShell. A shell consists of a data model that defines how the device and its properties are modeled in CloudShell, along with automation that enables interaction with the device via CloudShell.
 
 ### Cloud Provider Shells
-CloudShell's Cloud Providers shells provide L2 or L3 connectivity between resources and/or Apps [remove "and/or Apps" if router].
+CloudShell Cloud Providers shells provide L2 or L3 connectivity between resources and/or Apps.
 
 ### OCI Shell
 OCI Shell provides you with apps deployment and management capabilities. 
@@ -43,8 +43,6 @@ For detailed information about the shell’s structure and attributes, see the [
 Release: OCI Shell
 
 ▪ CloudShell version **9.3 and above**
-
-▪ Other
 
 **Note:** If your CloudShell version does not support this shell, you should consider upgrading to a later version of CloudShell or contact customer support. 
 
