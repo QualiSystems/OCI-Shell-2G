@@ -233,7 +233,6 @@ class OCIShellDriver(ResourceDriverInterface):
                                         if x.lower().endswith(".public ip")), "Public IP")
             resource_config.api.SetAttributeValue(name, public_ip_attr_name,
                                                   vnic.public_ip)
-            open()
         except:
             pass
 
