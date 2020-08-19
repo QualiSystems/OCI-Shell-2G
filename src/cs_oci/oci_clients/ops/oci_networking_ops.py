@@ -1,4 +1,5 @@
 import oci
+
 from oci import pagination
 
 from cs_oci.helper.oci_command_executor_with_wait import call_oci_command_with_waiter
@@ -283,7 +284,7 @@ class OciNetworkOps(object):
         result = pagination.list_call_get_all_results(
             self.network_client.list_subnets,
             self._resource_config.compartment_ocid,
-            vcn_id
+            vcn_id=vcn_id
         )
 
         if not subnet_cidr and result.data:
@@ -296,7 +297,7 @@ class OciNetworkOps(object):
         result = pagination.list_call_get_all_results(
             self.network_client.list_route_tables,
             self._resource_config.compartment_ocid,
-            vcn_id
+            vcn_id=vcn_id
         )
         return result.data
 
@@ -444,7 +445,8 @@ class OciNetworkOps(object):
                     service_gw.id,
                     [oci.core.models.ServiceGateway.LIFECYCLE_STATE_TERMINATED]
                 )
-            security_lists = self.network_client.list_security_lists(self._resource_config.compartment_ocid, vcn.id)
+            security_lists = self.network_client.list_security_lists(self._resource_config.compartment_ocid,
+                                                                     vcn_id=vcn.id)
             for security_list in security_lists.data:
                 if vcn.default_security_list_id == security_list.id:
                     continue

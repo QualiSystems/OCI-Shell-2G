@@ -1,6 +1,6 @@
 cloudshell-shell-core>=5.0.4,<6.0
 cloudshell-cp-core>=1.0.4.89,<1.1
 cloudshell-automation-api>=9.3
-oci
-requests
+oci>=2.0,<3
+requests>=2.0,<3
 cryptography<=2.9.0
