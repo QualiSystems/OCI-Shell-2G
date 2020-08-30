@@ -11,7 +11,6 @@ from cloudshell.cp.core.models import DeployApp, DeployAppResult, DriverResponse
     ConnectToSubnetActionResult
 from cloudshell.cp.core.models import CreateKeysActionResult, ActionResultBase
 
-
 from cloudshell.shell.core.resource_driver_interface import ResourceDriverInterface
 from cloudshell.shell.core.session.logging_session import LoggingSessionContext
 
@@ -127,8 +126,9 @@ class OCIShellDriver(ResourceDriverInterface):
                     'MAC Address': vnic_details.data.mac_address
                 })
                 attributes.append(Attribute(vm_instance_details.public_ip_attr_name, vnic_details.data.public_ip))
-                network_results.append(ConnectToSubnetActionResult(actionId=vm_instance_details.primary_subnet.action_id,
-                                                                   interface=primary_interface_json))
+                network_results.append(
+                    ConnectToSubnetActionResult(actionId=vm_instance_details.primary_subnet.action_id,
+                                                interface=primary_interface_json))
             new_security_list_item = None
             if vm_instance_details.inbound_ports:
                 new_security_list_item = oci_ops.network_ops.add_security_list(
@@ -138,7 +138,7 @@ class OCIShellDriver(ResourceDriverInterface):
 
                 if new_security_list_item:
                     oci_ops.network_ops.update_subnet_security_lists(vm_instance_details.primary_subnet.oci_subnet,
-                                                                     security_list_id=new_security_list_item.data.id)
+                                                                     security_list_id=new_security_list_item.id)
 
             oci_ops.compute_ops.update_instance_name(instance_name, instance.id)
             has_sec_public_ip = True
@@ -170,9 +170,16 @@ class OCIShellDriver(ResourceDriverInterface):
                                                                 src_dst_check=vm_instance_details.skip_src_dst_check,
                                                                 private_ip=vnic_action.private_ip,
                                                                 is_public=vnic_public_ip)
-                if new_security_list_item:
-                    oci_ops.network_ops.update_subnet_security_lists(vnic_action.oci_subnet,
-                                                                     security_list_id=new_security_list_item.data.id)
+                if vm_instance_details.inbound_ports:
+                    sec_security_list_item = oci_ops.network_ops.add_security_list(
+                        vcn_id=vnic_action.oci_subnet.vcn_id,
+                        security_list_name=instance_name,
+                        inbound_ports=vm_instance_details.inbound_ports)
+
+                    if sec_security_list_item:
+                        oci_ops.network_ops.update_subnet_security_lists(
+                            vnic_action.oci_subnet,
+                            security_list_id=sec_security_list_item.id)
                 network_results.append(
                     ConnectToSubnetActionResult(actionId=vnic_action.action_id, interface=interface_json))
         except Exception as e:

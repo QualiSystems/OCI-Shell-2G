@@ -34,8 +34,11 @@ class OciNetworkOps(object):
         self.update_route_table(route_table_id, default_static_rule, tag={"Target": "Internet"})
 
     def add_security_list(self, vcn_id, security_list_name, inbound_ports):
-        # 31.154.25.138
-        # 130.61.210.23
+        security_lists = self.network_client.list_security_lists(self._resource_config.compartment_ocid,
+                                                                 vcn_id=vcn_id)
+        for security_list in security_lists.data:
+            if security_list.display_name == security_list_name:
+                return security_list
         inbound_ports_map = {
             "tcp": oci.core.models.TcpOptions,
             "icmp": oci.core.models.IcmpOptions,
@@ -44,7 +47,6 @@ class OciNetworkOps(object):
         }
         inbound_ports_protocol_map = {"icmp": "1", "tcp": "6", "udp": "17", "icmpv6": "58"}
         security_list_ingress_rules = []
-        # inbound_ports_list = inbound_ports.split(";")
         for port in inbound_ports:
             rule_type = inbound_ports_map.get(port.protocol)
             if not rule_type:
@@ -83,7 +85,7 @@ class OciNetworkOps(object):
                 ),
                 [oci.core.models.SecurityList.LIFECYCLE_STATE_AVAILABLE],
                 operation_kwargs={"retry_strategy": RETRY_STRATEGY}
-            )
+            ).data
 
     def add_lpg_route(self, route_table_id, target_cidr, network_sevice_id):
         rule = oci.core.models.RouteRule(
@@ -423,12 +425,6 @@ class OciNetworkOps(object):
                 self.network_client_ops.delete_subnet_and_wait_for_state(
                     subnet.id,
                     [oci.core.models.Subnet.LIFECYCLE_STATE_TERMINATED])
-            # update_route_table_details = oci.core.models.UpdateRouteTableDetails(route_rules=[])
-            # self.network_client_ops.update_route_table_and_wait_for_state(
-            #     vcn.default_route_table_id,
-            #     update_route_table_details,
-            #     wait_for_states=[oci.core.models.RouteTable.LIFECYCLE_STATE_AVAILABLE]
-            # )
             for route_table in self.get_routing_tables(vcn.id):
                 if route_table.id != vcn.default_route_table_id:
                     self.network_client_ops.delete_route_table_and_wait_for_state(
