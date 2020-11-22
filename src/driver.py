@@ -3,6 +3,7 @@ from copy import copy
 import time
 import json
 import jsonpickle
+from cloudshell.api.common_cloudshell_api import CloudShellAPIError
 
 from cloudshell.shell.core.driver_context import AutoLoadDetails, ResourceRemoteCommandContext
 
@@ -13,13 +14,15 @@ from cloudshell.cp.core.models import CreateKeysActionResult, ActionResultBase
 
 from cloudshell.shell.core.resource_driver_interface import ResourceDriverInterface
 from cloudshell.shell.core.session.logging_session import LoggingSessionContext
+from oci.exceptions import ServiceError
 
 from cs_oci.domain.data import PrepareSandboxInfraRequest
 from cs_oci.oci_flows.oci_networking_flow import OciNetworkInfraFlow
 from data_model import OCIShellDriverResource
 from cs_oci.domain.instance_details import InstanceDetails
 from cs_oci.oci_clients.oci_ops import OciOps
-from cs_oci.helper.shell_helper import set_command_result, create_vm_details, create_win_console_link, OciShellError
+from cs_oci.helper.shell_helper import set_command_result, create_vm_details, create_win_console_link, OciShellError, \
+    get_interface_details_json
 
 
 class OCIShellDriver(ResourceDriverInterface):
@@ -47,7 +50,7 @@ class OCIShellDriver(ResourceDriverInterface):
         # resource_config.api.WriteMessageToReservationOutput(context.reservation.reservation_id,
         #                                                     'Request JSON: ' + request)
         with LoggingSessionContext(context) as logger:
-
+            logger.info("request is {}".format(request))
             deploy_action = None
             subnet_actions = list()
             # subnet_actions = OrderedDict()
@@ -81,19 +84,24 @@ class OCIShellDriver(ResourceDriverInterface):
         """
         # Init CloudShell and OCI APIs
         logger.info("Starting Deployment from Image")
-        oci_ops = OciOps(resource_config)
-        secondary_subnet_actions = {}
+        oci_ops = OciOps(resource_config, logger)
         network_results = []
 
         # Read deployment attributes
         app_name = deploy_action.actionParams.appName
         vm_instance_details = InstanceDetails(deploy_action, subnet_actions, oci_ops)
-
         ssh_pub_key = oci_ops.get_public_key()
-
-        instance = oci_ops.compute_ops.launch_instance(app_name=app_name,
-                                                       ssh_pub_key=ssh_pub_key,
-                                                       vm_details=vm_instance_details)
+        try:
+            instance = oci_ops.compute_ops.launch_instance(app_name=app_name,
+                                                           ssh_pub_key=ssh_pub_key,
+                                                           vm_details=vm_instance_details)
+        except ServiceError as e:
+            if e.status == 429:
+                instance = oci_ops.compute_ops.launch_instance(app_name=app_name,
+                                                               ssh_pub_key=ssh_pub_key,
+                                                               vm_details=vm_instance_details)
+            else:
+                raise
         instance_name = app_name + " " + instance.id.split(".")[-1][-10:]
         attributes = []
 
@@ -111,25 +119,24 @@ class OCIShellDriver(ResourceDriverInterface):
                 attributes.append(Attribute(vm_instance_details.password_attr_name, password))
 
             # set resource attributes (of the new resource) to use requested username and password
-
-            vnic_attachments = oci_ops.compute_ops.get_vnic_attachments(instance.id)
-            vnic_attachment = next((v for v in vnic_attachments if v), None)
-            if not vnic_attachment:
-                raise OciShellError("Unable to find primary instance vnic for app {}".format(instance_name))
-            vnic_details = oci_ops.network_ops.network_client.get_vnic(vnic_attachment.vnic_id)
+            vnic_details = oci_ops.get_primary_vnic(instance.id)
+            if not vnic_details and not vnic_details.oci_vnic:
+                vnic_details = oci_ops.get_primary_vnic(instance.id)
+                if not vnic_details and not vnic_details.oci_vnic:
+                    raise OciShellError("Unable to find primary instance vnic for app {}".format(instance_name))
 
             if vm_instance_details.primary_subnet.action_id:
                 primary_interface_json = json.dumps({
-                    'interface_id': vnic_details.data.id,
-                    'IP': vnic_details.data.private_ip,
-                    'Public IP': vnic_details.data.public_ip,
-                    'MAC Address': vnic_details.data.mac_address
+                    'interface_id': vnic_details.oci_vnic.id,
+                    'IP': vnic_details.oci_vnic.private_ip,
+                    'Public IP': vnic_details.oci_vnic.public_ip,
+                    'MAC Address': vnic_details.oci_vnic.mac_address
                 })
-                attributes.append(Attribute(vm_instance_details.public_ip_attr_name, vnic_details.data.public_ip))
+                attributes.append(Attribute(vm_instance_details.public_ip_attr_name, vnic_details.oci_vnic.public_ip))
                 network_results.append(
                     ConnectToSubnetActionResult(actionId=vm_instance_details.primary_subnet.action_id,
                                                 interface=primary_interface_json))
-            new_security_list_item = None
+
             if vm_instance_details.inbound_ports:
                 new_security_list_item = oci_ops.network_ops.add_security_list(
                     vcn_id=vm_instance_details.vcn_id,
@@ -142,8 +149,18 @@ class OCIShellDriver(ResourceDriverInterface):
 
             oci_ops.compute_ops.update_instance_name(instance_name, instance.id)
             has_sec_public_ip = True
+            logger.info("Instance {} got {} subnet requests (besides primary)".format(
+                instance_name,
+                len(vm_instance_details.secondary_subnets))
+            )
             for vnic_action in vm_instance_details.secondary_subnets:
                 vnic_public_ip = vm_instance_details.public_ip
+                subnet_name = vnic_action.oci_subnet.display_name
+                logger.info("Start creating vnic and attaching it to {} and {}".format(
+                    instance_name,
+                    subnet_name
+                ))
+
                 if vm_instance_details.public_ip:
                     vnic_public_ip = vnic_action.is_public_subnet
 
@@ -163,13 +180,21 @@ class OCIShellDriver(ResourceDriverInterface):
                                 resource_config.api.WriteMessageToReservationOutput(resource_config.reservation_id,
                                                                                     "Warning, {}".format(message))
                             logger.warning(message)
-
-                interface_json = oci_ops.attach_secondary_vnics(name=vnic_action.action_id,
-                                                                subnet_id=vnic_action.subnet_id,
-                                                                instance_id=instance.id,
-                                                                src_dst_check=vm_instance_details.skip_src_dst_check,
-                                                                private_ip=vnic_action.private_ip,
-                                                                is_public=vnic_public_ip)
+                logger.info("Start attaching vNIC {} to the instance {} and the subnet {}".format(
+                    vnic_action.action_id,
+                    instance_name,
+                    subnet_name))
+                secondary_vnic_details = oci_ops.attach_secondary_vnic(
+                    name=vnic_action.action_id,
+                    subnet_id=vnic_action.subnet_id,
+                    instance_id=instance.id,
+                    src_dst_check=vm_instance_details.skip_src_dst_check,
+                    private_ip=vnic_action.private_ip,
+                    is_public=vnic_public_ip)
+                interface_json = get_interface_details_json(secondary_vnic_details)
+                logger.info("vNIC {} was attached to the instance {} and the subnet {}".format(vnic_action.action_id,
+                                                                                               instance_name,
+                                                                                               subnet_name))
                 if vm_instance_details.inbound_ports:
                     sec_security_list_item = oci_ops.network_ops.add_security_list(
                         vcn_id=vnic_action.oci_subnet.vcn_id,
@@ -180,6 +205,10 @@ class OCIShellDriver(ResourceDriverInterface):
                         oci_ops.network_ops.update_subnet_security_lists(
                             vnic_action.oci_subnet,
                             security_list_id=sec_security_list_item.id)
+                        oci_ops.network_ops.check_security_list_attached(
+                            subnet=vnic_action.oci_subnet,
+                            security_list_id=sec_security_list_item.id
+                        )
                 network_results.append(
                     ConnectToSubnetActionResult(actionId=vnic_action.action_id, interface=interface_json))
         except Exception as e:
@@ -191,7 +220,7 @@ class OCIShellDriver(ResourceDriverInterface):
                                         infoMessage="Deployment Completed Successfully",
                                         vmUuid=instance.id,
                                         vmName=instance_name,
-                                        deployedAppAddress=vnic_details.data.private_ip,
+                                        deployedAppAddress=vnic_details.oci_vnic.private_ip,
                                         deployedAppAttributes=attributes,
                                         vmDetailsData=create_vm_details(
                                             resource_config,
@@ -217,11 +246,12 @@ class OCIShellDriver(ResourceDriverInterface):
 
         # Code to delete instance based on remote command context
         resource_config = OCIShellDriverResource.create_from_context(context)
-        oci_ops = OciOps(resource_config)
-        oci_ops.compute_ops.terminate_instance()
-        name = context.remote_endpoints[0].fullname.split('/')[0]
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
+            oci_ops.compute_ops.terminate_instance()
+            name = context.remote_endpoints[0].fullname.split('/')[0]
 
-        return "Successfully terminated instance " + name
+            return "Successfully terminated instance " + name
 
     def remote_refresh_ip(self, context, cancellation_context, ports):
         """ Refresh the IP of the resource from the VM
@@ -230,18 +260,19 @@ class OCIShellDriver(ResourceDriverInterface):
 
         resource_config = OCIShellDriverResource.create_from_context(context)
 
-        oci_ops = OciOps(resource_config)
-        instance_id = resource_config.remote_instance_id
-        name = context.remote_endpoints[0].fullname.split('/')[0]
-        vnic = oci_ops.get_primary_vnic(instance_id)
-        resource_config.api.UpdateResourceAddress(name, vnic.private_ip)
-        try:
-            public_ip_attr_name = next((x for x in context.remote_endpoints[0].attributes.keys()
-                                        if x.lower().endswith(".public ip")), "Public IP")
-            resource_config.api.SetAttributeValue(name, public_ip_attr_name,
-                                                  vnic.public_ip)
-        except:
-            pass
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
+            instance_id = resource_config.remote_instance_id
+            name = context.remote_endpoints[0].fullname.split('/')[0]
+            vnic = oci_ops.get_primary_vnic(instance_id)
+            resource_config.api.UpdateResourceAddress(name, vnic.private_ip)
+            try:
+                public_ip_attr_name = next((x for x in context.remote_endpoints[0].attributes.keys()
+                                            if x.lower().endswith(".public ip")), "Public IP")
+                resource_config.api.SetAttributeValue(name, public_ip_attr_name,
+                                                      vnic.public_ip)
+            except:
+                pass
 
     # def example_command(self, context, cancellation_context, ports):
     #     """ Example for your remote custom command
@@ -281,19 +312,20 @@ class OCIShellDriver(ResourceDriverInterface):
 
         resource_config = OCIShellDriverResource.create_from_context(context)
 
-        oci_ops = OciOps(resource_config)
-        instance_id = resource_config.remote_instance_id
-        oci_ops.compute_ops.change_instance_state(instance_id, oci_ops.compute_ops.INSTANCE_STOP)
-        name = context.remote_endpoints[0].fullname.split('/')[0]
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
+            instance_id = resource_config.remote_instance_id
+            oci_ops.compute_ops.change_instance_state(instance_id, oci_ops.compute_ops.INSTANCE_STOP)
+            name = context.remote_endpoints[0].fullname.split('/')[0]
 
-        try:
-            resource_config.api.SetResourceLiveStatus(name, 'OCOffline',
-                                                      'Resource is powered off')
-        except:  # if "OCOnline" live status is missing, revert to "Offline" live status
-            resource_config.api.SetResourceLiveStatus(name, 'Offline',
-                                                      'Resource is powered off')
+            try:
+                resource_config.api.SetResourceLiveStatus(name, 'OCOffline',
+                                                          'Resource is powered off')
+            except:  # if "OCOnline" live status is missing, revert to "Offline" live status
+                resource_config.api.SetResourceLiveStatus(name, 'Offline',
+                                                          'Resource is powered off')
 
-        return "VM stopped successfully"
+            return "VM stopped successfully"
 
     # the name is by the Qualisystems conventions
     def PowerOn(self, context, ports):
@@ -305,8 +337,8 @@ class OCIShellDriver(ResourceDriverInterface):
         """
 
         resource_config = OCIShellDriverResource.create_from_context(context)
-        oci_ops = OciOps(resource_config)
         with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
             instance_id = resource_config.remote_instance_id
             logger.info("Instance id: {}".format(instance_id))
             oci_ops.compute_ops.change_instance_state(instance_id, oci_ops.compute_ops.INSTANCE_START)
@@ -345,7 +377,9 @@ class OCIShellDriver(ResourceDriverInterface):
 
         resource_config = OCIShellDriverResource.create_from_context(context)
 
-        OciOps(resource_config)
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
+            oci_ops.network_ops.get_vcn_by_tag("")
         return AutoLoadDetails([], [])
 
     def get_vm_uuid(self, context, vm_name):
@@ -371,29 +405,30 @@ class OCIShellDriver(ResourceDriverInterface):
 
         resource_config = OCIShellDriverResource.create_from_context(context)
 
-        oci_ops = OciOps(resource_config)
-        requests_json = json.loads(requests)
-        vm_details_results = []
-        for refresh_request in requests_json["items"]:
-            vm_name = refresh_request["deployedAppJson"]["name"]
-            deployment_service = refresh_request["appRequestJson"]["deploymentService"][
-                "name"]
-            instance_id = resource_config.api.GetResourceDetails(vm_name).VmDetails.UID
-            instance = oci_ops.compute_ops.compute_client.get_instance(instance_id).data
-            vm_details_results.append(
-                create_vm_details(resource_config, oci_ops=oci_ops,
-                                  vm_name=vm_name,
-                                  deployment_service_name=deployment_service,
-                                  instance=instance))
-        return str(jsonpickle.encode(vm_details_results, unpicklable=False))
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
+            requests_json = json.loads(requests)
+            vm_details_results = []
+            for refresh_request in requests_json["items"]:
+                vm_name = refresh_request["deployedAppJson"]["name"]
+                deployment_service = refresh_request["appRequestJson"]["deploymentService"][
+                    "name"]
+                instance_id = resource_config.api.GetResourceDetails(vm_name).VmDetails.UID
+                instance = oci_ops.compute_ops.compute_client.get_instance(instance_id).data
+                vm_details_results.append(
+                    create_vm_details(resource_config, oci_ops=oci_ops,
+                                      vm_name=vm_name,
+                                      deployment_service_name=deployment_service,
+                                      instance=instance))
+            return str(jsonpickle.encode(vm_details_results, unpicklable=False))
 
     def console(self, context, ports, connection_type, client_os):
         """Generates a command for a console access to an instance"""
         resource_config = OCIShellDriverResource.create_from_context(context)
 
-        oci_ops = OciOps(resource_config)
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
 
-        with LoggingSessionContext(context) as logger:
             instance_id = resource_config.remote_instance_id
             ssh_pub_key = oci_ops.get_public_key()
 
@@ -423,9 +458,8 @@ class OCIShellDriver(ResourceDriverInterface):
         """Generates a command for a console access to an instance"""
         resource_config = OCIShellDriverResource.create_from_context(context)
 
-        oci_ops = OciOps(resource_config)
-
-        with LoggingSessionContext(context) as logger:
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
             oci_ops.set_as_routing_gw()
 
     def _remote_save_snapshot(self, context, ports, snapshot_name):
@@ -443,9 +477,9 @@ class OCIShellDriver(ResourceDriverInterface):
 
     def _remote_get_snapshots(self, context, ports):
         resource_config = OCIShellDriverResource.create_from_context(context)
-        oci_ops = OciOps(resource_config)
 
         with LoggingSessionContext(context) as logger:
+            oci_ops = OciOps(resource_config, logger)
             instance_id = resource_config.remote_instance_id
             instance = oci_ops.compute_ops.compute_client.get_instance(instance_id)
             volume_backups = oci_ops.storage_client.list_boot_volume_backups(instance.data.compartment_id)
@@ -455,9 +489,9 @@ class OCIShellDriver(ResourceDriverInterface):
     def _remote_restore_snapshot(self, context, ports, snapshot_name):
         # ToDo for future implementation
         resource_config = OCIShellDriverResource.create_from_context(context)
-        oci_ops = OciOps(resource_config)
 
         with LoggingSessionContext(context) as logger:
+            oci_ops = OciOps(resource_config, logger)
             self.PowerOff(context, ports)
 
     def PrepareSandboxInfra(self, context, request, cancellation_context):
@@ -472,7 +506,7 @@ class OCIShellDriver(ResourceDriverInterface):
 
         resource_config = OCIShellDriverResource.create_from_context(context)
         with resource_config.get_logger() as logger:
-            oci_ops = OciOps(resource_config)
+            oci_ops = OciOps(resource_config, logger)
             # resource_config.api.WriteMessageToReservationOutput(context.reservation.reservation_id,
             #                                                     'Request JSON: ' + request)
             oci_networks = OciNetworkInfraFlow(oci_ops, logger, resource_config)
@@ -481,31 +515,42 @@ class OCIShellDriver(ResourceDriverInterface):
             resource_config.api.WriteMessageToReservationOutput(resource_config.reservation_id,
                                                                 'Preparing Sandbox Connectivity...')
 
-        request_object = PrepareSandboxInfraRequest(resource_config, json_request)
-        request_object.parse_request()
-        try:
-            prepare_network_results = oci_networks.prepare_sandbox_infra(request_object)
+            request_object = PrepareSandboxInfraRequest(resource_config, json_request)
+            request_object.parse_request()
+            try:
+                prepare_network_results = oci_networks.prepare_sandbox_infra(request_object)
 
-        except Exception as e:
-            oci_ops.network_ops.remove_vcn()
-            raise
+            except Exception as e:
+                oci_ops.network_ops.remove_vcn()
+                raise
 
-        # Set Keypair
-        private_key, public_key = oci_ops.generate_rsa_key_pair()
-        oci_ops.upload_keypairs(private_key=private_key,
-                                public_key=public_key)
+            # Set Keypair
+            private_key, public_key = oci_ops.generate_rsa_key_pair()
+            oci_ops.upload_keypairs(private_key=private_key,
+                                    public_key=public_key)
 
-        prepare_network_results.append(CreateKeysActionResult(actionId=request_object.key_action_id,
-                                                              infoMessage='',
-                                                              accessKey=private_key))
+            prepare_network_results.append(CreateKeysActionResult(actionId=request_object.key_action_id,
+                                                                  infoMessage='',
+                                                                  accessKey=private_key))
 
-        quali_api = resource_config.quali_api_helper
-        quali_api.login()
-        quali_api.attach_file_to_reservation(resource_config.reservation_id,
-                                             private_key,
-                                             "{}.pem".format(resource_config.reservation_id))
+            quali_api = resource_config.quali_api_helper
+            quali_api.login()
+            quali_api.attach_file_to_reservation(resource_config.reservation_id,
+                                                 private_key,
+                                                 "{}.pem".format(resource_config.reservation_id))
 
-        return DriverResponse(prepare_network_results).to_driver_response_json()
+            for new_name, old_name in request_object.vcn_names_dict.items():
+                if new_name != old_name:
+                    logger.info("Trying to rename VCN Service: {} to {}".format(old_name, new_name))
+                    try:
+                        resource_config.api.SetServiceName(
+                            resource_config.reservation_id,
+                            old_name,
+                            new_name)
+                    except Exception:
+                        logger.exception("Error during renaming service.")
+
+            return DriverResponse(prepare_network_results).to_driver_response_json()
 
     def CleanupSandboxInfra(self, context, request):
         """
@@ -517,22 +562,25 @@ class OCIShellDriver(ResourceDriverInterface):
 
         json_request = json.loads(request)
         resource_config = OCIShellDriverResource.create_from_context(context)
-        oci_ops = OciOps(resource_config)
-        cleanup_action_id = next(action["actionId"] for action in json_request["driverRequest"]["actions"] if
-                                 action["type"] == "cleanupNetwork")
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
+            cleanup_action_id = next(action["actionId"] for action in json_request["driverRequest"]["actions"] if
+                                     action["type"] == "cleanupNetwork")
 
-        oci_ops.network_ops.remove_vcn()
-        oci_ops.remove_key_pairs()
-        quali_api = resource_config.quali_api_helper
-        quali_api.login()
-        quali_api.remove_attached_files(resource_config.reservation_id)
-        cleanup_result = ActionResultBase("cleanupNetwork", cleanup_action_id)
+            oci_ops.network_ops.remove_vcn()
+            oci_ops.remove_key_pairs()
+            quali_api = resource_config.quali_api_helper
+            quali_api.login()
+            quali_api.remove_attached_files(resource_config.reservation_id)
+            cleanup_result = ActionResultBase("cleanupNetwork", cleanup_action_id)
 
-        return set_command_result({'driverResponse': {'actionResults': [cleanup_result]}})
+            return set_command_result({'driverResponse': {'actionResults': [cleanup_result]}})
 
     def save_app(self, context, ports):
         resource_config = OCIShellDriverResource.create_from_context(context)
-        oci_ops = OciOps(resource_config)
+        with resource_config.get_logger() as logger:
+            oci_ops = OciOps(resource_config, logger)
 
-        return json.dumps(oci_ops.compute_ops.create_image_from_instance(resource_config.remote_instance_id,
-                                                                         resource_config.compartment_ocid))
+            return json.dumps(oci_ops.compute_ops.create_image_from_instance(
+                resource_config.remote_instance_id,
+                resource_config.compartment_ocid))

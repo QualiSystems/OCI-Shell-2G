@@ -1,8 +1,10 @@
 import json
+import time
 
 import oci
 
 from cs_oci.helper.shell_helper import OciShellError, RETRY_STRATEGY
+from cs_oci.model.vnic import VNIC
 from cs_oci.oci_clients.ops.oci_compute_ops import OciComputeOps
 from cs_oci.oci_clients.ops.oci_networking_ops import OciNetworkOps
 from cryptography.hazmat.primitives import serialization as crypto_serialization
@@ -13,29 +15,58 @@ from cryptography.hazmat.backends import default_backend as crypto_default_backe
 class OciOps(object):
     BUCKET_NAME = "CloudshellSSHKeysBucket"
 
-    def __init__(self, resource_config):
+    def __init__(self, resource_config, logger):
         """
 
         :type resource_config: src.data_model.OCIShellDriverResource
         """
         config = resource_config.oci_config
+        self._logger = logger
         self.resource_config = resource_config
         self.storage_client = oci.core.BlockstorageClient(config, retry_strategy=RETRY_STRATEGY)
         self.identity_client = oci.identity.IdentityClient(config, retry_strategy=RETRY_STRATEGY)
-        self.network_ops = OciNetworkOps(resource_config)
-        self.compute_ops = OciComputeOps(resource_config)
+        self.network_ops = OciNetworkOps(resource_config=resource_config, logger=logger)
+        self.compute_ops = OciComputeOps(resource_config=resource_config, logger=logger)
         self.storage_client_ops = oci.core.BlockstorageClientCompositeOperations(self.storage_client)
         self.object_storage_client = oci.object_storage.ObjectStorageClient(config)
         self.object_storage_client_ops = oci.object_storage.ObjectStorageClientCompositeOperations(
             self.object_storage_client)
 
-    def get_primary_vnic(self, instance_id):
-        for vnic_attachment in self.compute_ops.get_vnic_attachments(instance_id):
-            vnic = self.network_ops.network_client.get_vnic(vnic_attachment.vnic_id)
-            if vnic and vnic.data.is_primary:
-                return vnic.data
+    def get_vnic_attachments(self, instance_id):
+        i = 0
+        oci_vnic_attachments = self.compute_ops.get_vnic_attachments(instance_id)
+        vnic_attachments = [VNIC(oci_ops=self, logger=self._logger, vnic_attachment=vnic_att)
+                           for vnic_att in oci_vnic_attachments
+                           if vnic_att]
+        while not vnic_attachments and i != self.compute_ops.VNIC_ATTACHMENT_RETRY:
+            time.sleep(self.compute_ops.VNIC_ATTACHMENT_TIMEOUT)
+            oci_vnic_attachments = self.compute_ops.get_vnic_attachments(instance_id)
+            vnic_attachments = [VNIC(oci_ops=self, logger=self._logger, vnic_attachment=vnic_att)
+                                for vnic_att in oci_vnic_attachments
+                                if vnic_att]
+            i += 1
 
-    def attach_secondary_vnics(self, name, subnet_id, instance_id, is_public, private_ip, src_dst_check):
+        return vnic_attachments
+
+    def get_primary_vnic(self, instance_id):
+        attachments = self.get_vnic_attachments(instance_id)
+        result = next((x for x in attachments if x.oci_vnic.is_primary), None)
+        i = 0
+        while not result and i != self.compute_ops.VNIC_ATTACHMENT_RETRY:
+            time.sleep(self.compute_ops.VNIC_ATTACHMENT_TIMEOUT)
+            attachments = self.get_vnic_attachments(instance_id)
+            result = next((x for x in attachments if x.oci_vnic.is_primary), None)
+            i += 1
+
+        return result
+
+    def _attach_secondary_vnic(self, name, subnet_id, instance_id, is_public, private_ip, src_dst_check):
+        attachments = self.get_vnic_attachments(instance_id)
+        attached_vnic = next((x for x in attachments
+               if x.oci_vnic_attachment.display_name == name
+                  and x.oci_vnic_attachment.subnet_id == subnet_id), None)
+        if attached_vnic:
+            return attached_vnic
         secondary_vnic_details = oci.core.models.CreateVnicDetails(assign_public_ip=is_public,
                                                                    display_name=name,
                                                                    skip_source_dest_check=src_dst_check,
@@ -53,14 +84,20 @@ class OciOps(object):
             [
                 oci.core.models.VnicAttachment.LIFECYCLE_STATE_ATTACHED
             ])
-        vnic_details = self.network_ops.network_client.get_vnic(result.data.vnic_id)
 
-        return json.dumps({
-            'interface_id': vnic_details.data.id,
-            'IP': vnic_details.data.private_ip,
-            'Public IP': vnic_details.data.public_ip,
-            'MAC Address': vnic_details.data.mac_address,
-        })
+        vnic = VNIC(oci_ops=self, logger=self._logger, vnic_attachment=result.data)
+        attachments = self.get_vnic_attachments(instance_id)
+        if any(vnic for vnic in attachments if vnic.oci_vnic_attachment.id == vnic.oci_vnic_attachment.id):
+            return vnic.oci_vnic
+
+    def attach_secondary_vnic(self, name, subnet_id, instance_id, is_public, private_ip, src_dst_check, retry_count=3,
+                              retry_timeout=2):
+        result = self._attach_secondary_vnic(name, subnet_id, instance_id, is_public, private_ip, src_dst_check)
+        i = 0
+        while not result and i < retry_count:
+            time.sleep(retry_timeout)
+            result = self._attach_secondary_vnic(name, subnet_id, instance_id, is_public, private_ip, src_dst_check)
+        return result
 
     def get_attached_boot_volume(self, instance):
         storage_attachments = self.compute_ops.compute_client.list_boot_volume_attachments(instance.availability_domain,

@@ -1,6 +1,9 @@
+import time
+
 import oci
 
 from oci import pagination
+from oci.exceptions import ServiceError
 
 from cs_oci.helper.oci_command_executor_with_wait import call_oci_command_with_waiter
 from cs_oci.helper.shell_helper import OciShellError, RETRY_STRATEGY
@@ -9,12 +12,13 @@ from cs_oci.helper.shell_helper import OciShellError, RETRY_STRATEGY
 class OciNetworkOps(object):
     DEFAULT_CIDR = "0.0.0.0/0"
 
-    def __init__(self, resource_config, retry_strategy=RETRY_STRATEGY):
+    def __init__(self, resource_config, logger, retry_strategy=RETRY_STRATEGY):
         """
 
         :type resource_config: src.data_model.OCIShellDriverResource
         """
         config = resource_config.oci_config
+        self._logger = logger
         self._resource_config = resource_config
         self.network_client = oci.core.VirtualNetworkClient(config, retry_strategy=retry_strategy)
         self.network_client_ops = oci.core.VirtualNetworkClientCompositeOperations(self.network_client)
@@ -406,13 +410,41 @@ class OciNetworkOps(object):
         )
 
     def update_subnet_security_lists(self, subnet, security_list_id):
-        new_security_list = subnet.security_list_ids
+        current_subnet = self.get_subnet(subnet_id=subnet.id)
+        new_security_list = current_subnet.security_list_ids
+        if security_list_id in new_security_list:
+            return
         new_security_list.append(security_list_id)
+        try:
+            self._update_subnet_security_lists(subnet_id=subnet.id,
+                                               new_security_list=new_security_list)
+        except ServiceError as e:
+            if e.status == 400:
+                self._update_subnet_security_lists(subnet_id=subnet.id,
+                                                   new_security_list=new_security_list)
+
+    def _update_subnet_security_lists(self, subnet_id, new_security_list):
         self.network_client_ops.update_subnet_and_wait_for_state(
-            subnet.id,
+            subnet_id,
             oci.core.models.UpdateSubnetDetails(security_list_ids=new_security_list),
             [oci.core.models.Subnet.LIFECYCLE_STATE_AVAILABLE],
             operation_kwargs={"retry_strategy": RETRY_STRATEGY})
+
+    def check_security_list_attached(self, subnet, security_list_id, max_retries=5, timeout=5):
+        # ToDo replace this ugly one with proper solution
+        current_subnet = self.get_subnet(subnet_id=subnet.id)
+        i = 0
+        while security_list_id not in current_subnet.security_list_ids and i < max_retries:
+            self.update_subnet_security_lists(current_subnet, security_list_id)
+            time.sleep(timeout)
+            current_subnet = self.get_subnet(subnet_id=subnet.id)
+            i += 1
+        else:
+            if security_list_id not in current_subnet.security_list_ids:
+                raise OciShellError("Unable to update subnet {} with {} security list".format(
+                    current_subnet.display_name,
+                    security_list_id
+                ))
 
     def remove_vcn(self):
         vcns = self.get_vcn_by_tag(self._resource_config.reservation_id)

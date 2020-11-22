@@ -23,6 +23,7 @@ class SubnetAttributes:
         self.allow_sandbox_traffic = None
         self.cidr = None
         self.is_vcn = False
+        self.vcn_id = None
         self.public = True
         request_cidr = None
         for attrs in self._subnet_service_attrs:
@@ -36,6 +37,7 @@ class SubnetAttributes:
                 self.allow_sandbox_traffic = attrs.get("attributeValue", "").lower() == "true"
             elif attrs.get("attributeName", "").lower() == "vcn id":
                 self.is_vcn = True
+                self.vcn_id = attrs.get("attributeValue")
 
         if request_cidr:
             self.cidr = request_cidr
@@ -66,9 +68,14 @@ class PrepareSandboxInfraRequest(object):
         self._driver_request = json_request.get("driverRequest")
         self._actions = self._driver_request.get("actions")
         self._vcn_list = []
+        self._vcn_names_dict = {}
         self._keys_action_id = None
         self.is_default_flow = True
         self._resource_config = resource_config
+
+    @property
+    def vcn_names_dict(self):
+        return self._vcn_names_dict
 
     @property
     def vcn_list(self):
@@ -112,9 +119,7 @@ class PrepareSandboxInfraRequest(object):
                 else:
                     vcn_name = "VCN-{}".format(cidr.replace("/", "-"))
                 if subnet.alias != vcn_name:
-                    self._resource_config.api.SetServiceName(self._resource_config.reservation_id,
-                                                             subnet.alias,
-                                                             vcn_name)
+                    self._vcn_names_dict[vcn_name] = subnet.alias
                     subnet.alias = vcn_name
             elif main_vcn:
                 main_vcn.subnet_list.append(subnet)

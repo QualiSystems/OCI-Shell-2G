@@ -1,23 +1,29 @@
 import base64
+import time
 
 import oci
 from oci import pagination
+from oci.exceptions import CompositeOperationError, ServiceError
 
 from cs_oci.helper.shell_helper import OciShellError, RETRY_STRATEGY
 
 
 class OciComputeOps(object):
+    VNIC_ATTACHMENT_RETRY = 3
+    VNIC_ATTACHMENT_TIMEOUT = 2
+    MAX_INSTANCE_WAIT_TIMEOUT = 1600
     INSTANCE_START = "START"
     INSTANCE_STOP = "STOP"
     _INSTANCE_STATE_MAP = {INSTANCE_START: oci.core.models.Instance.LIFECYCLE_STATE_RUNNING,
                            INSTANCE_STOP: oci.core.models.Instance.LIFECYCLE_STATE_STOPPED}
 
-    def __init__(self, resource_config):
+    def __init__(self, resource_config, logger):
         """
 
         :type resource_config: src.data_model.OCIShellDriverResource
         """
         config = resource_config.oci_config
+        self._logger = logger
         self.resource_config = resource_config
         self.compute_client = oci.core.ComputeClient(config, retry_strategy=RETRY_STRATEGY)
         self.compute_client_ops = oci.core.ComputeClientCompositeOperations(self.compute_client)
@@ -34,7 +40,8 @@ class OciComputeOps(object):
 
     def launch_instance(self, app_name,
                         vm_details,
-                        ssh_pub_key):
+                        ssh_pub_key,
+                        timeout=MAX_INSTANCE_WAIT_TIMEOUT):
 
         compatible_shapes = pagination.list_call_get_all_results(self.compute_client.list_shapes,
                                                                  compartment_id=self.resource_config.compartment_ocid,
@@ -74,15 +81,35 @@ class OciComputeOps(object):
                 pass
             new_inst_details.metadata["user_data"] = base64.b64encode(data.decode('string_escape'))
 
+        wait_for_states = [oci.core.models.Instance.LIFECYCLE_STATE_RUNNING]
         # Start the VM
-
-        launch_instance_response = self.compute_client_ops.launch_instance_and_wait_for_state(
-            new_inst_details,
-            wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING])
-        if launch_instance_response.data:
+        try:
+            launch_instance_response = self.compute_client_ops.launch_instance_and_wait_for_state(
+                new_inst_details,
+                wait_for_states=wait_for_states)
             return launch_instance_response.data
-        else:
-            raise RuntimeError("Timeout when waiting for VM to Power on")
+        except CompositeOperationError as e:
+            deployed_instance = next(i.data for i in e.partial_results if i.data.display_name == app_name)
+            self._logger.error("Failed to launch instance {}".format(deployed_instance.display_name))
+            instance = self.compute_client.get_instance(deployed_instance.id)
+            if instance.data.lifecycle_state == oci.core.models.Instance.LIFECYCLE_STATE_RUNNING:
+                return instance.data
+            elif instance.data.lifecycle_state == oci.core.models.Instance.LIFECYCLE_STATE_STARTING:
+                try:
+                    waiter_result = oci.wait_until(
+                        self.compute_client,
+                        self.compute_client.get_instance(instance.data.id),
+                        evaluate_response=lambda r: getattr(r.data, 'lifecycle_state')
+                                                    and getattr(r.data, 'lifecycle_state').lower()
+                                                    in [w.lower() for w in wait_for_states],
+                        **{}
+                    )
+                    result_to_return = waiter_result
+                    return result_to_return.data
+                except Exception as e:
+                    pass
+            self.terminate_instance(instance.data.id)
+            raise OciShellError("Timeout exceeded when waiting for VM to Deploy")
 
     def get_windows_credentials(self, instance_id):
         try:
@@ -94,6 +121,12 @@ class OciComputeOps(object):
             pass
 
     def get_vnic_attachments(self, instance_id):
+        """
+
+        :param instance_id:
+        :return: list[oci]
+        :rtype: list[oci.core.models.VnicAttachment]
+        """
         vnic_attachments = self.compute_client.list_vnic_attachments(self.resource_config.compartment_ocid)
         return [vnic for vnic in vnic_attachments.data if vnic.instance_id == instance_id]
 
@@ -109,10 +142,34 @@ class OciComputeOps(object):
     def terminate_instance(self, instance_id=None):
         if not instance_id:
             instance_id = self.resource_config.remote_instance_id
+        for vnic in self.get_vnic_attachments(instance_id):
+            self.remove_vnic(vnic_id=vnic.id)
+
         self.compute_client_ops.terminate_instance_and_wait_for_state(
             instance_id,
             [oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED]
         )
+
+    def remove_vnic(self, vnic_id):
+        try:
+            self.compute_client_ops.detach_vnic_and_wait_for_state(
+                vnic_id,
+                [
+                    oci.core.models.VnicAttachment.LIFECYCLE_STATE_DETACHED
+                ])
+        except ServiceError as e:
+            if e.status == 409:
+                return
+        except CompositeOperationError as c_e:
+            self._logger.exception("Failed to detach vnic")
+            for result in c_e.partial_results:
+                if result.data.id == vnic_id \
+                        and result.data.lifecycle != oci.core.models.VnicAttachment.LIFECYCLE_STATE_DETACHED:
+                    self.compute_client_ops.detach_vnic_and_wait_for_state(
+                        vnic_id,
+                        [
+                            oci.core.models.VnicAttachment.LIFECYCLE_STATE_DETACHED
+                        ])
 
     def create_instance_console(self, instance_id, ssh_pub_key, compartment_ocid, tags):
         create_console = oci.core.models.CreateInstanceConsoleConnectionDetails()

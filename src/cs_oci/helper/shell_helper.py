@@ -1,3 +1,4 @@
+import json
 import re
 
 import jsonpickle
@@ -9,6 +10,7 @@ RETRY_STRATEGY = RetryStrategyBuilder().add_max_attempts(10) \
     .add_service_error_check(service_error_retry_on_any_5xx=True,
                              service_error_retry_config={
                                  400: ['QuotaExceeded', 'LimitExceeded'],
+                                 409: ["Conflict"],
                                  429: []
                              }) \
     .get_retry_strategy()
@@ -50,6 +52,15 @@ def create_win_console_link(instance_id, console_id, region, linux_ssh_link="", 
         return WIN_SSH_LINK_TEMPLATE.format(**data_dict)
 
 
+def get_interface_details_json(vnic_details):
+    return json.dumps({
+        'interface_id': vnic_details.id,
+        'IP': vnic_details.private_ip,
+        'Public IP': vnic_details.public_ip,
+        'MAC Address': vnic_details.mac_address,
+    })
+
+
 def create_vm_details(resource_config, oci_ops, vm_name, deployment_service_name, instance):
     """ Create the VM Details results used for both Deployment and Refresh VM Details
     :param resource_config:
@@ -73,27 +84,27 @@ def create_vm_details(resource_config, oci_ops, vm_name, deployment_service_name
     ]
 
     vm_network_data = []
-    vnic_attachments = oci_ops.compute_ops.get_vnic_attachments(instance.id)
-    for vnic in vnic_attachments:
-        instance_nic = oci_ops.network_ops.network_client.get_vnic(vnic.vnic_id)
+    vnics = oci_ops.get_vnic_attachments(instance.id)
+    for vnic in vnics:
+        instance_nic = vnic.oci_vnic
 
         vm_nic = VmDetailsNetworkInterface()
-        vm_nic.interfaceId = instance_nic.data.id
-        vm_nic.networkId = instance_nic.data.subnet_id
-        subnet = oci_ops.network_ops.get_subnet(instance_nic.data.subnet_id)
+        vm_nic.interfaceId = instance_nic.id
+        vm_nic.networkId = instance_nic.subnet_id
+        subnet = oci_ops.network_ops.get_subnet(instance_nic.subnet_id)
 
         vm_nic.isPrimary = False
         vm_nic.isPredefined = False
         # ToDo find a better way to determine if the vnic is primary or not
-        if vnic.display_name == resource_config.reservation_id or vnic.display_name is None:
+        if instance_nic.is_primary:
             vm_nic.isPrimary = True
             vm_nic.isPredefined = True
-        vm_nic.privateIpAddress = instance_nic.data.private_ip
-        vm_nic.networkData.append(VmDetailsProperty("IP", instance_nic.data.private_ip))
-        vm_nic.networkData.append(VmDetailsProperty("Public IP", instance_nic.data.public_ip))
-        vm_nic.networkData.append(VmDetailsProperty("MAC Address", instance_nic.data.mac_address))
-        vm_nic.networkData.append(VmDetailsProperty("VLAN Name", vnic.vlan_tag))
-        vm_nic.networkData.append(VmDetailsProperty("Skip src/dst check", instance_nic.data.skip_source_dest_check))
+        vm_nic.privateIpAddress = instance_nic.private_ip
+        vm_nic.networkData.append(VmDetailsProperty("IP", instance_nic.private_ip))
+        vm_nic.networkData.append(VmDetailsProperty("Public IP", instance_nic.public_ip))
+        vm_nic.networkData.append(VmDetailsProperty("MAC Address", instance_nic.mac_address))
+        vm_nic.networkData.append(VmDetailsProperty("VLAN Name", vnic.oci_vnic_attachment.vlan_tag))
+        vm_nic.networkData.append(VmDetailsProperty("Skip src/dst check", instance_nic.skip_source_dest_check))
         if subnet:
             vm_nic.networkData.append(VmDetailsProperty("VCN ID", subnet.freeform_tags.get("VCN_ID", "")))
 

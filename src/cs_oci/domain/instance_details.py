@@ -130,7 +130,7 @@ class InstanceDetails(object):
     def public_ip_attr_name(self):
         if not self._public_ip_attr:
             self._public_ip_attr = next((x for x in self._app_resource if x.lower().endswith(".public ip")),
-                              "Public IP")
+                                        "Public IP")
         return self._public_ip_attr
 
     @property
@@ -191,41 +191,55 @@ class InstanceDetails(object):
                                           if s.actionParams.vnicName == primary_ip.name),
                                          None)
             if not primary_subnet_action:
-                primary_subnet_action = next((s for s in subnet_actions
-                                              if self.check_ip_in_subnet((
-                        s.actionParams.subnetServiceAttributes.get("Requested CIDR") or
-                        s.actionParams.subnetServiceAttributes.get("Allocated CIDR", "")),
-                    primary_ip.ip)),
-                                             None)
+                primary_subnet_action = next(
+                    (s for s in subnet_actions
+                     if self.check_ip_in_subnet((
+                            s.actionParams.subnetServiceAttributes.get("Requested CIDR") or
+                            s.actionParams.subnetServiceAttributes.get("Allocated CIDR", "")),
+                        primary_ip.ip)),
+                    None)
 
         if not primary_subnet_action:
             primary_subnet_action = subnet_actions[0]
+
         self._primary_subnet_action = DeploySubnet(oci_ops=self._oci_ops,
                                                    action_id=primary_subnet_action.actionId,
                                                    subnet_id=primary_subnet_action.actionParams.subnetId,
                                                    ip=primary_ip)
 
         subnet_actions.remove(primary_subnet_action)
+        subnet = None
+        ip_address = None
         if primary_ip:
             ip_address_list.remove(primary_ip)
+        if ip_address_list:
+            for ip in ip_address_list:
+                for subnet in subnet_actions:
+                    cidr = self._get_cidr(subnet)
+                    if self.identify_ip([ip], cidr):
+                        ip_address = ip
+                        break
+        else:
+            subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
+            for subnet in subnet_actions:
+                ip_address = None
+                if ip_address_list:
+                    ip_address = next((ip for ip in ip_address_list if ip.name == subnet.actionParams.vnicName), "")
+                    if not ip_address:
+                        cidr = self._get_cidr(subnet)
+                        ip_address = self.identify_ip(ip_address_list, cidr)
+                    if ip_address:
+                        ip_address_list.remove(ip_address)
+                if subnet:
+                    self._secondary_subnet_actions.append(DeploySubnet(oci_ops=self._oci_ops,
+                                                                       action_id=subnet.actionId,
+                                                                       subnet_id=subnet.actionParams.subnetId,
+                                                                       is_public_subnet=subnet.actionParams.isPublic,
+                                                                       ip=ip_address))
 
-        subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
-        for subnet in subnet_actions:
-            ip_address = None
-            if ip_address_list:
-                ip_address = next((ip for ip in ip_address_list if ip.name == subnet.actionParams.vnicName), "")
-                if not ip_address:
-                    cidr = subnet.actionParams.subnetServiceAttributes.get("Requested CIDR") or \
-                           subnet.actionParams.subnetServiceAttributes.get("Allocated CIDR")
-                    ip_address = self.identify_ip(ip_address_list, cidr)
-                if ip_address:
-                    ip_address_list.remove(ip_address)
-
-            self._secondary_subnet_actions.append(DeploySubnet(oci_ops=self._oci_ops,
-                                                               action_id=subnet.actionId,
-                                                               subnet_id=subnet.actionParams.subnetId,
-                                                               is_public_subnet=subnet.actionParams.isPublic,
-                                                               ip=ip_address))
+    def _get_cidr(self, subnet):
+        return subnet.actionParams.subnetServiceAttributes.get("Requested CIDR") or \
+               subnet.actionParams.subnetServiceAttributes.get("Allocated CIDR")
 
     def identify_ip(self, ip_list, network):
         for ip in ip_list:
