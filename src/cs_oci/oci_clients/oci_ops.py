@@ -34,10 +34,7 @@ class OciOps(object):
 
     def get_vnic_attachments(self, instance_id):
         i = 0
-        oci_vnic_attachments = self.compute_ops.get_vnic_attachments(instance_id)
-        vnic_attachments = [VNIC(oci_ops=self, logger=self._logger, vnic_attachment=vnic_att)
-                           for vnic_att in oci_vnic_attachments
-                           if vnic_att]
+        vnic_attachments = None
         while not vnic_attachments and i != self.compute_ops.VNIC_ATTACHMENT_RETRY:
             time.sleep(self.compute_ops.VNIC_ATTACHMENT_TIMEOUT)
             oci_vnic_attachments = self.compute_ops.get_vnic_attachments(instance_id)
@@ -48,13 +45,18 @@ class OciOps(object):
 
         return vnic_attachments
 
-    def get_primary_vnic(self, instance_id):
-        attachments = self.get_vnic_attachments(instance_id)
-        result = next((x for x in attachments if x.oci_vnic.is_primary), None)
+    def get_primary_vnic(self, instance_id, retries=6, timeout=5):
+        result = None
         i = 0
-        while not result and i != self.compute_ops.VNIC_ATTACHMENT_RETRY:
-            time.sleep(self.compute_ops.VNIC_ATTACHMENT_TIMEOUT)
+        while not result and i != retries:
+            time.sleep(timeout)
             attachments = self.get_vnic_attachments(instance_id)
+            for attachment in attachments:
+                self._logger.info("Found {} vnic attachments".format(len(attachments)))
+
+                self._logger.info("Attached vnic is {} is primary {}".format(
+                    attachment.oci_vnic.display_name,
+                    attachment.oci_vnic.is_primary))
             result = next((x for x in attachments if x.oci_vnic.is_primary), None)
             i += 1
 
@@ -63,8 +65,8 @@ class OciOps(object):
     def _attach_secondary_vnic(self, name, subnet_id, instance_id, is_public, private_ip, src_dst_check):
         attachments = self.get_vnic_attachments(instance_id)
         attached_vnic = next((x for x in attachments
-               if x.oci_vnic_attachment.display_name == name
-                  and x.oci_vnic_attachment.subnet_id == subnet_id), None)
+                              if x.oci_vnic_attachment.display_name == name
+                              and x.oci_vnic_attachment.subnet_id == subnet_id), None)
         if attached_vnic:
             return attached_vnic
         secondary_vnic_details = oci.core.models.CreateVnicDetails(assign_public_ip=is_public,
@@ -100,10 +102,13 @@ class OciOps(object):
         return result
 
     def get_attached_boot_volume(self, instance):
-        storage_attachments = self.compute_ops.compute_client.list_boot_volume_attachments(instance.availability_domain,
-                                                                                           instance.compartment_id)
+        storage_attachments = oci.pagination.list_call_get_all_results(
+            self.compute_ops.compute_client.list_boot_volume_attachments,
+            availability_domain=instance.availability_domain,
+            compartment_id=instance.compartment_id,
+            instance_id=instance.id).data
         instance_volume = self.storage_client.get_boot_volume(
-            next((x.boot_volume_id for x in storage_attachments.data if x.instance_id == instance.id), None))
+            next((x.boot_volume_id for x in storage_attachments if x.instance_id == instance.id), None))
         return instance_volume.data
 
     def create_volume_backup(self, instance, snapshot_name, tags):

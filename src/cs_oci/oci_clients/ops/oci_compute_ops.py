@@ -9,7 +9,7 @@ from cs_oci.helper.shell_helper import OciShellError, RETRY_STRATEGY
 
 
 class OciComputeOps(object):
-    VNIC_ATTACHMENT_RETRY = 3
+    VNIC_ATTACHMENT_RETRY = 4
     VNIC_ATTACHMENT_TIMEOUT = 2
     MAX_INSTANCE_WAIT_TIMEOUT = 1600
     INSTANCE_START = "START"
@@ -127,8 +127,12 @@ class OciComputeOps(object):
         :return: list[oci]
         :rtype: list[oci.core.models.VnicAttachment]
         """
-        vnic_attachments = self.compute_client.list_vnic_attachments(self.resource_config.compartment_ocid)
-        return [vnic for vnic in vnic_attachments.data if vnic.instance_id == instance_id]
+        vnic_attachments = oci.pagination.list_call_get_all_results(
+            self.compute_client.list_vnic_attachments,
+            compartment_id=self.resource_config.compartment_ocid,
+            instance_id=instance_id
+        ).data
+        return vnic_attachments
 
     def update_instance_name(self, name, instance_id):
         instance_update = oci.core.models.UpdateInstanceDetails()
@@ -142,13 +146,14 @@ class OciComputeOps(object):
     def terminate_instance(self, instance_id=None):
         if not instance_id:
             instance_id = self.resource_config.remote_instance_id
-        for vnic in self.get_vnic_attachments(instance_id):
-            self.remove_vnic(vnic_id=vnic.id)
 
         self.compute_client_ops.terminate_instance_and_wait_for_state(
             instance_id,
             [oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED]
         )
+
+        for vnic in self.get_vnic_attachments(instance_id):
+            self.remove_vnic(vnic_id=vnic.id)
 
     def remove_vnic(self, vnic_id):
         try:
@@ -163,7 +168,9 @@ class OciComputeOps(object):
         except CompositeOperationError as c_e:
             self._logger.exception("Failed to detach vnic")
             for result in c_e.partial_results:
-                if result.data.id == vnic_id \
+                if result \
+                        and result.data \
+                        and result.data.id == vnic_id \
                         and result.data.lifecycle != oci.core.models.VnicAttachment.LIFECYCLE_STATE_DETACHED:
                     self.compute_client_ops.detach_vnic_and_wait_for_state(
                         vnic_id,

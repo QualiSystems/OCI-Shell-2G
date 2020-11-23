@@ -208,8 +208,6 @@ class InstanceDetails(object):
                                                    ip=primary_ip)
 
         subnet_actions.remove(primary_subnet_action)
-        subnet = None
-        ip_address = None
         if primary_ip:
             ip_address_list.remove(primary_ip)
         if ip_address_list:
@@ -218,6 +216,13 @@ class InstanceDetails(object):
                     cidr = self._get_cidr(subnet)
                     if self.identify_ip([ip], cidr):
                         ip_address = ip
+                        if subnet:
+                            self._secondary_subnet_actions.append(
+                                DeploySubnet(oci_ops=self._oci_ops,
+                                             action_id=subnet.actionId,
+                                             subnet_id=subnet.actionParams.subnetId,
+                                             is_public_subnet=subnet.actionParams.isPublic,
+                                             ip=ip_address))
                         break
         else:
             subnet_actions.sort(key=lambda x: x.actionParams.vnicName)

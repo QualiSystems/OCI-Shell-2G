@@ -3,7 +3,6 @@ from copy import copy
 import time
 import json
 import jsonpickle
-from cloudshell.api.common_cloudshell_api import CloudShellAPIError
 
 from cloudshell.shell.core.driver_context import AutoLoadDetails, ResourceRemoteCommandContext
 
@@ -50,7 +49,7 @@ class OCIShellDriver(ResourceDriverInterface):
         # resource_config.api.WriteMessageToReservationOutput(context.reservation.reservation_id,
         #                                                     'Request JSON: ' + request)
         with LoggingSessionContext(context) as logger:
-            logger.info("request is {}".format(request))
+            # logger.info("Request is {}".format(request))
             deploy_action = None
             subnet_actions = list()
             # subnet_actions = OrderedDict()
@@ -90,6 +89,7 @@ class OCIShellDriver(ResourceDriverInterface):
         # Read deployment attributes
         app_name = deploy_action.actionParams.appName
         vm_instance_details = InstanceDetails(deploy_action, subnet_actions, oci_ops)
+        ee = vm_instance_details.secondary_subnets
         ssh_pub_key = oci_ops.get_public_key()
         try:
             instance = oci_ops.compute_ops.launch_instance(app_name=app_name,
@@ -120,9 +120,10 @@ class OCIShellDriver(ResourceDriverInterface):
 
             # set resource attributes (of the new resource) to use requested username and password
             vnic_details = oci_ops.get_primary_vnic(instance.id)
-            if not vnic_details and not vnic_details.oci_vnic:
+            if not vnic_details or not vnic_details.oci_vnic:
+                time.sleep(5)
                 vnic_details = oci_ops.get_primary_vnic(instance.id)
-                if not vnic_details and not vnic_details.oci_vnic:
+                if not vnic_details or not vnic_details.oci_vnic:
                     raise OciShellError("Unable to find primary instance vnic for app {}".format(instance_name))
 
             if vm_instance_details.primary_subnet.action_id:
@@ -265,12 +266,12 @@ class OCIShellDriver(ResourceDriverInterface):
             instance_id = resource_config.remote_instance_id
             name = context.remote_endpoints[0].fullname.split('/')[0]
             vnic = oci_ops.get_primary_vnic(instance_id)
-            resource_config.api.UpdateResourceAddress(name, vnic.private_ip)
+            resource_config.api.UpdateResourceAddress(name, vnic.oci_vnic.private_ip)
             try:
                 public_ip_attr_name = next((x for x in context.remote_endpoints[0].attributes.keys()
                                             if x.lower().endswith(".public ip")), "Public IP")
                 resource_config.api.SetAttributeValue(name, public_ip_attr_name,
-                                                      vnic.public_ip)
+                                                      vnic.oci_vnic.public_ip)
             except:
                 pass
 
@@ -327,12 +328,9 @@ class OCIShellDriver(ResourceDriverInterface):
 
             return "VM stopped successfully"
 
-    # the name is by the Qualisystems conventions
     def PowerOn(self, context, ports):
         """ Powers on the remote vm
         :param ResourceRemoteCommandContext context: the context the command runs on
-        :param list[string] ports: the ports of the connection between the remote resource and the local resource, NOT IN USE!!!
-
         :type context ResourceRemoteCommandContext
         """
 
@@ -357,7 +355,6 @@ class OCIShellDriver(ResourceDriverInterface):
     def PowerCycle(self, context, ports, delay):
         """ Perform PowerOff followed up by PowerOn after {delay} seconds - NOT IN USE
         :param context: ResourceRemoteCommandContext
-        :param ports: list[string] ports: the ports of the connection between the remote resource and the local resource, NOT IN USE!!!
         :param delay: int : Seconds to delay between powering off and back on.
         :return:
         """
@@ -524,6 +521,18 @@ class OCIShellDriver(ResourceDriverInterface):
                 oci_ops.network_ops.remove_vcn()
                 raise
 
+            # Rename VCN Subnet Services
+            for new_name, old_name in request_object.vcn_names_dict.items():
+                if new_name != old_name:
+                    logger.info("Trying to rename VCN Service: {} to {}".format(old_name, new_name))
+                    try:
+                        resource_config.api.SetServiceName(
+                            resource_config.reservation_id,
+                            old_name,
+                            new_name)
+                    except Exception:
+                        logger.exception("Error during renaming service.")
+
             # Set Keypair
             private_key, public_key = oci_ops.generate_rsa_key_pair()
             oci_ops.upload_keypairs(private_key=private_key,
@@ -539,17 +548,7 @@ class OCIShellDriver(ResourceDriverInterface):
                                                  private_key,
                                                  "{}.pem".format(resource_config.reservation_id))
 
-            for new_name, old_name in request_object.vcn_names_dict.items():
-                if new_name != old_name:
-                    logger.info("Trying to rename VCN Service: {} to {}".format(old_name, new_name))
-                    try:
-                        resource_config.api.SetServiceName(
-                            resource_config.reservation_id,
-                            old_name,
-                            new_name)
-                    except Exception:
-                        logger.exception("Error during renaming service.")
-
+            logger.info("Prepare Connectivity operation completed")
             return DriverResponse(prepare_network_results).to_driver_response_json()
 
     def CleanupSandboxInfra(self, context, request):
