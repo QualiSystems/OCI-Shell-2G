@@ -522,16 +522,16 @@ class OCIShellDriver(ResourceDriverInterface):
                 raise
 
             # Rename VCN Subnet Services
-            for new_name, old_name in request_object.vcn_names_dict.items():
-                if new_name != old_name:
-                    logger.info("Trying to rename VCN Service: {} to {}".format(old_name, new_name))
-                    try:
-                        resource_config.api.SetServiceName(
-                            resource_config.reservation_id,
-                            old_name,
-                            new_name)
-                    except Exception:
-                        logger.exception("Error during renaming service.")
+            # for new_name, old_name in request_object.vcn_names_dict.items():
+            #     if new_name != old_name:
+            #         logger.info("Trying to rename VCN Service: {} to {}".format(old_name, new_name))
+            #         try:
+            #             resource_config.api.SetServiceName(
+            #                 resource_config.reservation_id,
+            #                 old_name,
+            #                 new_name)
+            #         except Exception:
+            #             logger.exception("Error during renaming service.")
 
             # Set Keypair
             private_key, public_key = oci_ops.generate_rsa_key_pair()
@@ -565,13 +565,14 @@ class OCIShellDriver(ResourceDriverInterface):
             oci_ops = OciOps(resource_config, logger)
             cleanup_action_id = next(action["actionId"] for action in json_request["driverRequest"]["actions"] if
                                      action["type"] == "cleanupNetwork")
-
-            oci_ops.network_ops.remove_vcn()
-            oci_ops.remove_key_pairs()
-            quali_api = resource_config.quali_api_helper
-            quali_api.login()
-            quali_api.remove_attached_files(resource_config.reservation_id)
-            cleanup_result = ActionResultBase("cleanupNetwork", cleanup_action_id)
+            try:
+                oci_ops.remove_vcn()
+            finally:
+                oci_ops.remove_key_pairs()
+                quali_api = resource_config.quali_api_helper
+                quali_api.login()
+                quali_api.remove_attached_files(resource_config.reservation_id)
+                cleanup_result = ActionResultBase("cleanupNetwork", cleanup_action_id)
 
             return set_command_result({'driverResponse': {'actionResults': [cleanup_result]}})
 

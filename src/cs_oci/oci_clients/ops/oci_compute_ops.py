@@ -143,17 +143,40 @@ class OciComputeOps(object):
             instance_update,
             wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING])
 
-    def terminate_instance(self, instance_id=None):
+    def terminate_instance(self, instance_id=None, timeout=5, retries=5):
         if not instance_id:
             instance_id = self.resource_config.remote_instance_id
+        instance = self.compute_client.get_instance(instance_id)
+        if not instance \
+                or instance.data.lifecycle_state == oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED:
+            return
+        # self.change_instance_state(instance_id, self.INSTANCE_STOP)
+        try:
+            self.compute_client_ops.terminate_instance_and_wait_for_state(
+                instance_id,
+                [oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED]
+            )
+        except ServiceError as se:
+            if se.status != 404:
+                raise
+        except CompositeOperationError as ce:
+            for result in ce.partial_results:
+                if result.data.id == instance_id:
+                    instance_state = result.data.lifecycle
+                    i = 0
+                    while instance_state != oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED\
+                        and i < retries:
+                        time.sleep(timeout)
+                        instance_state = self.compute_client.get_instance(instance_id).data.lifecycle
 
-        self.compute_client_ops.terminate_instance_and_wait_for_state(
-            instance_id,
-            [oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED]
-        )
-
-        for vnic in self.get_vnic_attachments(instance_id):
+        vnic_attachments = self.get_vnic_attachments(instance_id)
+        # i = 0
+        # while vnic_attachments and i < retries:
+        #     time.sleep(timeout)
+        for vnic in vnic_attachments:
             self.remove_vnic(vnic_id=vnic.id)
+        #     vnic_attachments = self.get_vnic_attachments(instance_id)
+        #     i += 1
 
     def remove_vnic(self, vnic_id):
         try:

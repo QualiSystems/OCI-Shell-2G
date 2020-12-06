@@ -1,7 +1,9 @@
 import json
+import re
 import time
 
 import oci
+from oci.exceptions import CompositeOperationError, ServiceError
 
 from cs_oci.helper.shell_helper import OciShellError, RETRY_STRATEGY
 from cs_oci.model.vnic import VNIC
@@ -14,6 +16,7 @@ from cryptography.hazmat.backends import default_backend as crypto_default_backe
 
 class OciOps(object):
     BUCKET_NAME = "CloudshellSSHKeysBucket"
+    VNIC_PATTERN = re.compile(r"ocid1.vnic\S+", re.IGNORECASE)
 
     def __init__(self, resource_config, logger):
         """
@@ -62,7 +65,8 @@ class OciOps(object):
 
         return result
 
-    def _attach_secondary_vnic(self, name, subnet_id, instance_id, is_public, private_ip, src_dst_check):
+    def _attach_secondary_vnic(self, name, subnet_id, instance_id, is_public, private_ip, src_dst_check,
+                               retries=3, timeout=5):
         attachments = self.get_vnic_attachments(instance_id)
         attached_vnic = next((x for x in attachments
                               if x.oci_vnic_attachment.display_name == name
@@ -81,16 +85,38 @@ class OciOps(object):
         secondary_vnic_attach_details = oci.core.models.AttachVnicDetails(create_vnic_details=secondary_vnic_details,
                                                                           display_name=name,
                                                                           instance_id=instance_id)
-        result = self.compute_ops.compute_client_ops.attach_vnic_and_wait_for_state(
-            secondary_vnic_attach_details,
-            [
-                oci.core.models.VnicAttachment.LIFECYCLE_STATE_ATTACHED
-            ])
-
-        vnic = VNIC(oci_ops=self, logger=self._logger, vnic_attachment=result.data)
-        attachments = self.get_vnic_attachments(instance_id)
-        if any(vnic for vnic in attachments if vnic.oci_vnic_attachment.id == vnic.oci_vnic_attachment.id):
-            return vnic.oci_vnic
+        result = None
+        try:
+            result = self.compute_ops.compute_client_ops.attach_vnic_and_wait_for_state(
+                secondary_vnic_attach_details,
+                [
+                    oci.core.models.VnicAttachment.LIFECYCLE_STATE_ATTACHED
+                ])
+        except CompositeOperationError as e:
+            for partial_result in e.partial_results:
+                if partial_result and partial_result.data:
+                    if partial_result.data.lifecycle == oci.core.models.VnicAttachment.LIFECYCLE_STATE_ATTACHED:
+                        result = partial_result
+                        break
+                    if partial_result.data.lifecycle == oci.core.models.VnicAttachment.LIFECYCLE_STATE_ATTACHING:
+                        vnic = self.compute_ops.compute_client.get_vnic_attachment(partial_result.data.id)
+                        i = 0
+                        while vnic.data.lifecycle != oci.core.models.VnicAttachment.LIFECYCLE_STATE_ATTACHED\
+                                and i < retries:
+                            time.sleep(timeout)
+                            vnic = self.compute_ops.compute_client.get_vnic_attachment(partial_result.data.id)
+                            i += 1
+                        result = vnic
+                        if vnic.data.lifecycle != oci.core.models.VnicAttachment.LIFECYCLE_STATE_ATTACHED:
+                            raise OciShellError("Failed to attach vnic {} to instance {}".format(
+                                name,
+                                instance_id
+                            ))
+        if result:
+            vnic = VNIC(oci_ops=self, logger=self._logger, vnic_attachment=result.data)
+            attachments = self.get_vnic_attachments(instance_id)
+            if any(vnic for vnic in attachments if vnic.oci_vnic_attachment.id == vnic.oci_vnic_attachment.id):
+                return vnic.oci_vnic
 
     def attach_secondary_vnic(self, name, subnet_id, instance_id, is_public, private_ip, src_dst_check, retry_count=3,
                               retry_timeout=2):
@@ -241,3 +267,70 @@ class OciOps(object):
                     continue
                 rule.destination = dst_subnet.cidr_block
                 self.network_ops.update_route_table(route_table_id=route_table, route_rule=rule)
+
+    def remove_vcn(self, subnet_retires=6):
+        vcns = self.network_ops.get_vcn_by_tag(self.resource_config.reservation_id)
+        error_list = []
+        for vcn in vcns:
+            subnets = self.network_ops.get_subnets(vcn_id=vcn.id) or []
+            service_gateways = self.network_ops.get_service_gateways(vcn_id=vcn.id) or []
+            internet_gateways = self.network_ops.get_inet_gateways(vcn_id=vcn.id) or []
+            lpgs = self.network_ops.get_local_peering_gws(vcn_id=vcn.id)
+            for subnet in subnets:
+                i = 0
+                while i < subnet_retires:
+                    try:
+                        self.network_ops.remove_subnet(subnet)
+                        break
+                    except ServiceError as e:
+                        self._logger.exception("Unable to remove subnet {}".format(subnet.display_name))
+                        vnic_id_match = self.VNIC_PATTERN.search(e.message)
+                        if vnic_id_match:
+                            vnic_id = vnic_id_match.group().rstrip('.,')
+                            self.compute_ops.remove_vnic(vnic_id)
+                    except Exception:
+                        self._logger.exception("Unable to remove subnet {}".format(subnet.display_name))
+                        error_list.append(subnet.display_name)
+                        break
+                else:
+                    error_list.append(subnet.display_name)
+            for route_table in self.network_ops.get_routing_tables(vcn.id):
+                if route_table.id != vcn.default_route_table_id:
+                    self.network_ops.network_client_ops.delete_route_table_and_wait_for_state(
+                        route_table.id,
+                        [oci.core.models.RouteTable.LIFECYCLE_STATE_TERMINATED]
+                    )
+            for local_peering_gw in lpgs:
+                self.network_ops.network_client_ops.delete_local_peering_gateway_and_wait_for_state(
+                    local_peering_gw.id,
+                    wait_for_states=[oci.core.models.LocalPeeringGateway.LIFECYCLE_STATE_TERMINATED]
+                )
+            for service_gw in service_gateways:
+                self.network_ops.network_client_ops.delete_service_gateway_and_wait_for_state(
+                    service_gw.id,
+                    [oci.core.models.ServiceGateway.LIFECYCLE_STATE_TERMINATED]
+                )
+            security_lists = self.network_ops.network_client.list_security_lists(self.resource_config.compartment_ocid,
+                                                                     vcn_id=vcn.id)
+            for security_list in security_lists.data:
+                if vcn.default_security_list_id == security_list.id:
+                    continue
+                self.network_ops.network_client_ops.delete_security_list_and_wait_for_state(
+                    security_list.id,
+                    [oci.core.models.SecurityList.LIFECYCLE_STATE_TERMINATED])
+            for internet_gw in internet_gateways:
+                self.network_ops.network_client_ops.delete_internet_gateway_and_wait_for_state(
+                    internet_gw.id,
+                    wait_for_states=[oci.core.models.InternetGateway.LIFECYCLE_STATE_TERMINATED]
+                )
+            try:
+                self.network_ops.network_client_ops.delete_vcn_and_wait_for_state(
+                    vcn.id,
+                    [oci.core.models.Vcn.LIFECYCLE_STATE_TERMINATED])
+            except ServiceError as vcn_e:
+                self._logger.exception("Failed to delete VCN {}".format(vcn.display_name))
+                error_list.append(vcn.display_name)
+
+            if error_list:
+                self._logger.error("The following items were not removed {}".format(error_list))
+                raise OciShellError("Unable to cleanup sandbox. Please see logs for details.")

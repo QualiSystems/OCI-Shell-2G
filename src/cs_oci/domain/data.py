@@ -22,25 +22,27 @@ class SubnetAttributes:
         self._subnet_service_attrs = subnet_service_attrs or []
         self.allow_sandbox_traffic = None
         self.cidr = None
+        self.allocated_cidr = None
         self.is_vcn = False
         self.vcn_id = None
         self.public = True
-        request_cidr = None
+        self.request_cidr = None
         for attrs in self._subnet_service_attrs:
             if attrs.get("attributeName", "").lower() == "allocated cidr":
-                self.cidr = attrs.get("attributeValue")
+                self.allocated_cidr = attrs.get("attributeValue")
+                self.cidr = self.allocated_cidr
             elif attrs.get("attributeName", "").lower() == "public":
                 self.public = attrs.get("attributeValue").lower() == "true"
             elif attrs.get("attributeName", "").lower() == "requested cidr":
-                request_cidr = attrs.get("attributeValue")
+                self.request_cidr = attrs.get("attributeValue")
             elif attrs.get("attributeName", "").lower() == "allow all sandbox traffic":
                 self.allow_sandbox_traffic = attrs.get("attributeValue", "").lower() == "true"
             elif attrs.get("attributeName", "").lower() == "vcn id":
                 self.is_vcn = True
                 self.vcn_id = attrs.get("attributeValue")
 
-        if request_cidr:
-            self.cidr = request_cidr
+        if self.request_cidr:
+            self.cidr = self.request_cidr
 
 
 class SubnetRequest(object):
@@ -118,7 +120,9 @@ class PrepareSandboxInfraRequest(object):
                                                    net.num_addresses)
                 else:
                     vcn_name = "VCN-{}".format(cidr.replace("/", "-"))
-                if subnet.alias != vcn_name:
+                if subnet.alias != vcn_name \
+                        and subnet.attributes.request_cidr\
+                        and self._check_cidr_in_subnet_name(subnet):
                     self._vcn_names_dict[vcn_name] = subnet.alias
                     subnet.alias = vcn_name
             elif main_vcn:
@@ -126,3 +130,13 @@ class PrepareSandboxInfraRequest(object):
         if does_vcn_act_as_subnet and any(x for x in subnet_dict.values() if not x.attributes.is_vcn):
             raise OciShellError("Mixed connectivity mode is unsupported: "
                                 "please use only Subnet Services or only VCN Services")
+
+    def _check_cidr_in_subnet_name(self, subnet):
+        """
+
+        :type subnet: SubnetRequest
+        """
+        alloc_cidr = subnet.attributes.allocated_cidr
+        alloc_cidr_pattern = alloc_cidr[:alloc_cidr.rfind(".")]
+        if alloc_cidr_pattern in subnet.alias:
+            return True

@@ -446,47 +446,7 @@ class OciNetworkOps(object):
                     security_list_id
                 ))
 
-    def remove_vcn(self):
-        vcns = self.get_vcn_by_tag(self._resource_config.reservation_id)
-        for vcn in vcns:
-            subnets = self.get_subnets(vcn_id=vcn.id) or []
-            service_gateways = self.get_service_gateways(vcn_id=vcn.id) or []
-            internet_gateways = self.get_inet_gateways(vcn_id=vcn.id) or []
-            lpgs = self.get_local_peering_gws(vcn_id=vcn.id)
-            for subnet in subnets:
-                self.network_client_ops.delete_subnet_and_wait_for_state(
-                    subnet.id,
-                    [oci.core.models.Subnet.LIFECYCLE_STATE_TERMINATED])
-            for route_table in self.get_routing_tables(vcn.id):
-                if route_table.id != vcn.default_route_table_id:
-                    self.network_client_ops.delete_route_table_and_wait_for_state(
-                        route_table.id,
-                        [oci.core.models.RouteTable.LIFECYCLE_STATE_TERMINATED]
-                    )
-            for local_peering_gw in lpgs:
-                self.network_client_ops.delete_local_peering_gateway_and_wait_for_state(
-                    local_peering_gw.id,
-                    wait_for_states=[oci.core.models.LocalPeeringGateway.LIFECYCLE_STATE_TERMINATED]
-                )
-            for service_gw in service_gateways:
-                self.network_client_ops.delete_service_gateway_and_wait_for_state(
-                    service_gw.id,
-                    [oci.core.models.ServiceGateway.LIFECYCLE_STATE_TERMINATED]
-                )
-            security_lists = self.network_client.list_security_lists(self._resource_config.compartment_ocid,
-                                                                     vcn_id=vcn.id)
-            for security_list in security_lists.data:
-                if vcn.default_security_list_id == security_list.id:
-                    continue
-                self.network_client_ops.delete_security_list_and_wait_for_state(
-                    security_list.id,
-                    [oci.core.models.SecurityList.LIFECYCLE_STATE_TERMINATED])
-            for internet_gw in internet_gateways:
-                self.network_client_ops.delete_internet_gateway_and_wait_for_state(
-                    internet_gw.id,
-                    wait_for_states=[oci.core.models.InternetGateway.LIFECYCLE_STATE_TERMINATED]
-                )
-
-            self.network_client_ops.delete_vcn_and_wait_for_state(
-                vcn.id,
-                [oci.core.models.Vcn.LIFECYCLE_STATE_TERMINATED])
+    def remove_subnet(self, subnet):
+        self.network_client_ops.delete_subnet_and_wait_for_state(
+            subnet.id,
+            [oci.core.models.Subnet.LIFECYCLE_STATE_TERMINATED])
