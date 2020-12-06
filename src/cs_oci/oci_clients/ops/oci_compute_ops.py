@@ -146,10 +146,16 @@ class OciComputeOps(object):
     def terminate_instance(self, instance_id=None, timeout=5, retries=5):
         if not instance_id:
             instance_id = self.resource_config.remote_instance_id
-        instance = self.compute_client.get_instance(instance_id)
-        if not instance \
-                or instance.data.lifecycle_state == oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED:
-            return
+        try:
+            instance = self.compute_client.get_instance(instance_id)
+            if not instance \
+                    or instance.data.lifecycle_state == oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED:
+                return
+        except ServiceError as s_e:
+            if s_e.code == "NotAuthorizedOrNotFound":
+                return
+            else:
+                raise
         # self.change_instance_state(instance_id, self.INSTANCE_STOP)
         try:
             self.compute_client_ops.terminate_instance_and_wait_for_state(

@@ -52,6 +52,11 @@ node_types:
         default: False
         description: Enable or disable source/destination check on a vnic.
         tags: [user_input]
+      Autoload:
+        type: boolean
+        default: True
+        description: Whether to call the autoload command during Sandbox setup.
+        tags: [user_input]
       Cloud Init Script Data:
         type: string
         default:

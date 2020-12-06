@@ -54,23 +54,23 @@ class OciNetworkInfraFlow(object):
 
                 oci_vcn_name = "{}-{}".format(self._resource_config.reservation_id, vcn_subnet.alias)
                 vcn = self._oci_ops.network_ops.create_vcn(vcn_subnet.cidr, oci_vcn_name, is_public)
-                if not vcn_subnet.attributes.vcn_id:
-                    try:
-                        self._resource_config.api.SetServiceAttributesValues(
-                            self._resource_config.reservation_id,
-                            request_object.vcn_names_dict.get(vcn_subnet.alias),
-                            [AttributeNameValue("VCN Id", vcn.id)])
-                    except CloudShellAPIError:
-                        self._logger.exception("Failed to rename '{}' Service".format(
-                            request_object.vcn_names_dict.get(vcn_subnet.alias)))
-                        try:
-                            self._resource_config.api.SetServiceAttributesValues(
-                                self._resource_config.reservation_id,
-                                vcn_subnet.alias,
-                                [AttributeNameValue("VCN Id", vcn.id)])
-                        except CloudShellAPIError:
-                            self._logger.exception("Failed to rename '{}' Service".format(
-                                vcn_subnet.alias))
+                # if not vcn_subnet.attributes.vcn_id:
+                #     try:
+                #         self._resource_config.api.SetServiceAttributesValues(
+                #             self._resource_config.reservation_id,
+                #             request_object.vcn_names_dict.get(vcn_subnet.alias),
+                #             [AttributeNameValue("VCN Id", vcn.id)])
+                #     except CloudShellAPIError:
+                #         self._logger.exception("Failed to rename '{}' Service".format(
+                #             request_object.vcn_names_dict.get(vcn_subnet.alias)))
+                #         try:
+                #             self._resource_config.api.SetServiceAttributesValues(
+                #                 self._resource_config.reservation_id,
+                #                 vcn_subnet.alias,
+                #                 [AttributeNameValue("VCN Id", vcn.id)])
+                #         except CloudShellAPIError:
+                #             self._logger.exception("Failed to rename '{}' Service".format(
+                #                 vcn_subnet.alias))
 
                 if vcn_subnet.attributes.allow_sandbox_traffic:
                     traffic_vcn_list.append(vcn)

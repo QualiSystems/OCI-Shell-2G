@@ -165,8 +165,8 @@ class InstanceDetails(object):
                 action_id = None
             else:
                 subnet_id = self._subnet_actions[0].actionParams.subnetId
-                cidr = self._subnet_actions[0].actionParams.subnetServiceAttributes.get("Requested CIDR") or \
-                       self._subnet_actions[0].actionParams.subnetServiceAttributes.get("Allocated CIDR")
+                cidr = self._subnet_actions[0].actionParams.cidr
+                # cidr = self._subnet_actions[0].actionParams.subnetServiceAttributes.get("Allocated CIDR")
                 action_id = self._subnet_actions[0].actionId
 
             self._primary_subnet_action = DeploySubnet(oci_ops=self._oci_ops,
@@ -194,8 +194,7 @@ class InstanceDetails(object):
                 primary_subnet_action = next(
                     (s for s in subnet_actions
                      if self.check_ip_in_subnet((
-                            s.actionParams.subnetServiceAttributes.get("Requested CIDR") or
-                            s.actionParams.subnetServiceAttributes.get("Allocated CIDR", "")),
+                            s.actionParams.cidr),
                         primary_ip.ip)),
                     None)
 
