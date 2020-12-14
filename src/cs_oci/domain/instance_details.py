@@ -1,14 +1,16 @@
-import json
 import re
 from copy import copy
-
-import ipaddress
-
-from cs_oci.helper.shell_helper import OciShellError
+from ipaddress import ip_address, ip_network
 
 
 class InboundRule(object):
     def __init__(self, ports, cidr=None, protocol=None):
+        """Reflect inbound rules.
+
+        :param ports:
+        :param cidr:
+        :param protocol:
+        """
         self.ports = ports or "all"
         self.cidr = cidr or "0.0.0.0/0"
         if "/" not in self.cidr:
@@ -18,12 +20,25 @@ class InboundRule(object):
 
 class PrivateIP(object):
     def __init__(self, private_ip, name=""):
+        """Reflect private IP.
+
+        :param private_ip:
+        :param name:
+        """
         self.name = name.strip()
         self.ip = private_ip.strip()
 
 
 class DeploySubnet(object):
     def __init__(self, oci_ops, action_id, subnet_id, is_public_subnet=None, ip=None):
+        """Reflect Subnet details.
+
+        :param oci_ops:
+        :param action_id:
+        :param subnet_id:
+        :param is_public_subnet:
+        :param ip:
+        """
         self.action_id = action_id
         self.private_ip = ip
         self.subnet_id = subnet_id
@@ -40,6 +55,12 @@ class DeploySubnet(object):
 
 class InstanceDetails(object):
     def __init__(self, deploy_action, subnet_actions, oci_ops):
+        """Reflect Instance Attributes
+
+        :param deploy_action:
+        :param subnet_actions:
+        :param oci_ops:
+        """
         self._oci_ops = oci_ops
         self._deployment_path = deploy_action.actionParams.deployment.deploymentPath
         self._deploy_attribs = deploy_action.actionParams.deployment.attributes
@@ -69,18 +90,24 @@ class InstanceDetails(object):
 
     @property
     def public_ip(self):
-        public_ip_str = self._deploy_attribs.get("{}.Add Public IP".format(self._deployment_path), "")
+        public_ip_str = self._deploy_attribs.get(
+            "{}.Add Public IP".format(self._deployment_path), ""
+        )
 
         return public_ip_str.lower() == "true"
 
     @property
     def cloud_init_params(self):
-        return self._deploy_attribs.get("{}.Cloud Init Script Data".format(self._deployment_path), "")
+        return self._deploy_attribs.get(
+            "{}.Cloud Init Script Data".format(self._deployment_path), ""
+        )
 
     @property
     def requested_private_ips(self):
         result = []
-        private_ips_str = self._deploy_attribs.get("{}.Requested Private IP".format(self._deployment_path), "")
+        private_ips_str = self._deploy_attribs.get(
+            "{}.Requested Private IP".format(self._deployment_path), ""
+        )
         if private_ips_str:
             for private_ip in map(unicode.strip, private_ips_str.strip(";").split(";")):
                 result.append(PrivateIP(*private_ip.split(":")[::-1]))
@@ -100,7 +127,9 @@ class InstanceDetails(object):
 
     @property
     def skip_src_dst_check(self):
-        public_ip_str = self._deploy_attribs.get("{}.Skip VNIC src or dst check".format(self._deployment_path), "")
+        public_ip_str = self._deploy_attribs.get(
+            "{}.Skip VNIC src or dst check".format(self._deployment_path), ""
+        )
 
         return public_ip_str.lower() == "true"
 
@@ -121,16 +150,23 @@ class InstanceDetails(object):
     @property
     def user_attr_name(self):
         if not self._user:
-            self._user = next((x for x in self._app_resource
-                               if x.lower().endswith(".user") or x.lower() == "user"),
-                              "User")
+            self._user = next(
+                (
+                    x
+                    for x in self._app_resource
+                    if x.lower().endswith(".user") or x.lower() == "user"
+                ),
+                "User",
+            )
         return self._user
 
     @property
     def public_ip_attr_name(self):
         if not self._public_ip_attr:
-            self._public_ip_attr = next((x for x in self._app_resource if x.lower().endswith(".public ip")),
-                                        "Public IP")
+            self._public_ip_attr = next(
+                (x for x in self._app_resource if x.lower().endswith(".public ip")),
+                "Public IP",
+            )
         return self._public_ip_attr
 
     @property
@@ -139,17 +175,27 @@ class InstanceDetails(object):
 
     @property
     def password_attr_name(self):
-        return next((x for x in self._app_resource
-                     if x.lower().endswith(".password") or x.lower() == "password"),
-                    "Password")
+        return next(
+            (
+                x
+                for x in self._app_resource
+                if x.lower().endswith(".password") or x.lower() == "password"
+            ),
+            "Password",
+        )
 
     def _parse_inbound_ports(self):
-        raw_data = self._deploy_attribs.get("{}.Inbound Ports".format(self._deployment_path), "")
+        raw_data = self._deploy_attribs.get(
+            "{}.Inbound Ports".format(self._deployment_path), ""
+        )
         self._inbound_ports = []
         for item in raw_data.split(";"):
-            rule_match = re.search(r"^(((?P<cidr>\d+.\d+.\d+.\d+(/\d+)*):)?"
-                                   r"(?P<protocol>\w+):)?(?P<ports>(all|\d+([-,]\d+)*))$",
-                                   item, re.IGNORECASE)
+            rule_match = re.search(
+                r"^(((?P<cidr>\d+.\d+.\d+.\d+(/\d+)*):)?"
+                r"(?P<protocol>\w+):)?(?P<ports>(all|\d+([-,]\d+)*))$",
+                item,
+                re.IGNORECASE,
+            )
             if rule_match:
                 self._inbound_ports.append(InboundRule(**rule_match.groupdict()))
 
@@ -166,17 +212,20 @@ class InstanceDetails(object):
             else:
                 subnet_id = self._subnet_actions[0].actionParams.subnetId
                 cidr = self._subnet_actions[0].actionParams.cidr
-                # cidr = self._subnet_actions[0].actionParams.subnetServiceAttributes.get("Allocated CIDR")
                 action_id = self._subnet_actions[0].actionId
 
-            self._primary_subnet_action = DeploySubnet(oci_ops=self._oci_ops,
-                                                       subnet_id=subnet_id,
-                                                       action_id=action_id)
+            self._primary_subnet_action = DeploySubnet(
+                oci_ops=self._oci_ops, subnet_id=subnet_id, action_id=action_id
+            )
             if self.requested_private_ips:
                 if len(self.requested_private_ips) < 2:
-                    self._primary_subnet_action.private_ip = self.requested_private_ips[0]
+                    self._primary_subnet_action.private_ip = self.requested_private_ips[
+                        0
+                    ]
                 else:
-                    self._primary_subnet_action.private_ip = self.identify_ip(self.requested_private_ips, cidr)
+                    self._primary_subnet_action.private_ip = self.identify_ip(
+                        self.requested_private_ips, cidr
+                    )
 
             return
 
@@ -187,24 +236,33 @@ class InstanceDetails(object):
         if ip_address_list:
             subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
             primary_ip = ip_address_list[0]
-            primary_subnet_action = next((s for s in subnet_actions
-                                          if s.actionParams.vnicName == primary_ip.name),
-                                         None)
+            primary_subnet_action = next(
+                (
+                    s
+                    for s in subnet_actions
+                    if s.actionParams.vnicName == primary_ip.name
+                ),
+                None,
+            )
             if not primary_subnet_action:
                 primary_subnet_action = next(
-                    (s for s in subnet_actions
-                     if self.check_ip_in_subnet((
-                            s.actionParams.cidr),
-                        primary_ip.ip)),
-                    None)
+                    (
+                        s
+                        for s in subnet_actions
+                        if self.check_ip_in_subnet((s.actionParams.cidr), primary_ip.ip)
+                    ),
+                    None,
+                )
 
         if not primary_subnet_action:
             primary_subnet_action = subnet_actions[0]
 
-        self._primary_subnet_action = DeploySubnet(oci_ops=self._oci_ops,
-                                                   action_id=primary_subnet_action.actionId,
-                                                   subnet_id=primary_subnet_action.actionParams.subnetId,
-                                                   ip=primary_ip)
+        self._primary_subnet_action = DeploySubnet(
+            oci_ops=self._oci_ops,
+            action_id=primary_subnet_action.actionId,
+            subnet_id=primary_subnet_action.actionParams.subnetId,
+            ip=primary_ip,
+        )
 
         subnet_actions.remove(primary_subnet_action)
         if primary_ip:
@@ -217,33 +275,48 @@ class InstanceDetails(object):
                         ip_address = ip
                         if subnet:
                             self._secondary_subnet_actions.append(
-                                DeploySubnet(oci_ops=self._oci_ops,
-                                             action_id=subnet.actionId,
-                                             subnet_id=subnet.actionParams.subnetId,
-                                             is_public_subnet=subnet.actionParams.isPublic,
-                                             ip=ip_address))
+                                DeploySubnet(
+                                    oci_ops=self._oci_ops,
+                                    action_id=subnet.actionId,
+                                    subnet_id=subnet.actionParams.subnetId,
+                                    is_public_subnet=subnet.actionParams.isPublic,
+                                    ip=ip_address,
+                                )
+                            )
                         break
         else:
             subnet_actions.sort(key=lambda x: x.actionParams.vnicName)
             for subnet in subnet_actions:
                 ip_address = None
                 if ip_address_list:
-                    ip_address = next((ip for ip in ip_address_list if ip.name == subnet.actionParams.vnicName), "")
+                    ip_address = next(
+                        (
+                            ip
+                            for ip in ip_address_list
+                            if ip.name == subnet.actionParams.vnicName
+                        ),
+                        "",
+                    )
                     if not ip_address:
                         cidr = self._get_cidr(subnet)
                         ip_address = self.identify_ip(ip_address_list, cidr)
                     if ip_address:
                         ip_address_list.remove(ip_address)
                 if subnet:
-                    self._secondary_subnet_actions.append(DeploySubnet(oci_ops=self._oci_ops,
-                                                                       action_id=subnet.actionId,
-                                                                       subnet_id=subnet.actionParams.subnetId,
-                                                                       is_public_subnet=subnet.actionParams.isPublic,
-                                                                       ip=ip_address))
+                    self._secondary_subnet_actions.append(
+                        DeploySubnet(
+                            oci_ops=self._oci_ops,
+                            action_id=subnet.actionId,
+                            subnet_id=subnet.actionParams.subnetId,
+                            is_public_subnet=subnet.actionParams.isPublic,
+                            ip=ip_address,
+                        )
+                    )
 
     def _get_cidr(self, subnet):
-        return subnet.actionParams.subnetServiceAttributes.get("Requested CIDR") or \
-               subnet.actionParams.subnetServiceAttributes.get("Allocated CIDR")
+        return subnet.actionParams.subnetServiceAttributes.get(
+            "Requested CIDR"
+        ) or subnet.actionParams.subnetServiceAttributes.get("Allocated CIDR")
 
     def identify_ip(self, ip_list, network):
         for ip in ip_list:
@@ -251,6 +324,6 @@ class InstanceDetails(object):
                 return ip
 
     def check_ip_in_subnet(self, cidr, ip):
-        ip_addr = ipaddress.ip_address(unicode(ip))
-        if ip_addr in ipaddress.ip_network(unicode(cidr)):
+        ip_addr = ip_address(unicode(ip))
+        if ip_addr in ip_network(unicode(cidr)):
             return True

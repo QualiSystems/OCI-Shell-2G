@@ -1,5 +1,3 @@
-
-
 class VNIC:
     def __init__(self, oci_ops, logger, vnic_attachment):
         self._oci_ops = oci_ops
@@ -9,7 +7,7 @@ class VNIC:
 
     @property
     def oci_vnic_attachment(self):
-        """
+        """Retrieve vnic attachment details from OCI
 
         :rtype: oci.core.models.VnicAttachment
         """
@@ -18,11 +16,12 @@ class VNIC:
 
     @property
     def oci_vnic(self):
-        """
+        """Retrieve vnic details from OCI
 
         :rtype: oci.core.models.vnic.Vnic
         """
         if not self._oci_vnic and self._vnic_attachment:
             self._oci_vnic = self._oci_ops.network_ops.network_client.get_vnic(
-                self.oci_vnic_attachment.vnic_id).data
+                self.oci_vnic_attachment.vnic_id
+            ).data
         return self._oci_vnic

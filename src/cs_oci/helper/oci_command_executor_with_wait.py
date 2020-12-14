@@ -3,13 +3,16 @@ import oci
 from cs_oci.helper.shell_helper import OciShellError
 
 
-def call_oci_command_with_waiter(network_client, cmd_to_call,
-                     cmd_to_check_status,
-                     ocid_to_check=None,
-                     state_to_check="lifecycle_state",
-                     wait_for_states=None,
-                     cmd_kwargs=None,
-                     waiter_kwargs=None):
+def call_oci_command_with_waiter(
+    network_client,
+    cmd_to_call,
+    cmd_to_check_status,
+    ocid_to_check=None,
+    state_to_check="lifecycle_state",
+    wait_for_states=None,
+    cmd_kwargs=None,
+    waiter_kwargs=None,
+):
     if not wait_for_states:
         wait_for_states = []
     if not cmd_kwargs:
@@ -35,18 +38,22 @@ def call_oci_command_with_waiter(network_client, cmd_to_call,
         raise OciShellError("Unable to check for state: OCID not found")
 
     lowered_wait_for_states = [w.lower() for w in wait_for_states]
-
+    evaluate_lambda = (
+        lambda r: getattr(r.data, state_to_check)
+        and getattr(r.data, state_to_check).lower()  # noqa #W503
+        in lowered_wait_for_states  # noqa #W503
+    )
     try:
         waiter_result = oci.wait_until(
             network_client,
             cmd_to_check_status(wait_for_resource_id),
-            evaluate_response=lambda r: getattr(r.data, state_to_check
-                                                ) and getattr(r.data, state_to_check
-                                                              ).lower() in lowered_wait_for_states,
+            evaluate_response=evaluate_lambda,
             **waiter_kwargs
         )
         result_to_return = waiter_result
 
         return result_to_return
     except Exception as e:
-        raise oci.exceptions.CompositeOperationError(partial_results=[operation_result], cause=e)
+        raise oci.exceptions.CompositeOperationError(
+            partial_results=[operation_result], cause=e
+        )
