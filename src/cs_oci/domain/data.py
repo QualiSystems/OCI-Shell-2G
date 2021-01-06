@@ -1,6 +1,6 @@
+import ipaddress
 import re
 
-import ipaddress
 from cloudshell.cp.core.models import PrepareSubnetActionResult
 
 from cs_oci.helper.shell_helper import OciShellError
@@ -22,29 +22,37 @@ class SubnetAttributes:
         self._subnet_service_attrs = subnet_service_attrs or []
         self.allow_sandbox_traffic = None
         self.cidr = None
+        self.allocated_cidr = None
         self.is_vcn = False
+        self.vcn_id = None
         self.public = True
-        request_cidr = None
+        self.request_cidr = None
         for attrs in self._subnet_service_attrs:
             if attrs.get("attributeName", "").lower() == "allocated cidr":
-                self.cidr = attrs.get("attributeValue")
+                self.allocated_cidr = attrs.get("attributeValue")
+                self.cidr = self.allocated_cidr
             elif attrs.get("attributeName", "").lower() == "public":
                 self.public = attrs.get("attributeValue").lower() == "true"
             elif attrs.get("attributeName", "").lower() == "requested cidr":
-                request_cidr = attrs.get("attributeValue")
+                self.request_cidr = attrs.get("attributeValue")
             elif attrs.get("attributeName", "").lower() == "allow all sandbox traffic":
-                self.allow_sandbox_traffic = attrs.get("attributeValue", "").lower() == "true"
+                self.allow_sandbox_traffic = (
+                    attrs.get("attributeValue", "").lower() == "true"
+                )
             elif attrs.get("attributeName", "").lower() == "vcn id":
                 self.is_vcn = True
+                self.vcn_id = attrs.get("attributeValue")
 
-        if request_cidr:
-            self.cidr = request_cidr
+        if self.request_cidr:
+            self.cidr = self.request_cidr
 
 
 class SubnetRequest(object):
     def __init__(self, action):
         self.subnet_action_id = action.get("actionId")
-        subnet_services = action.get("actionParams", {}).get("subnetServiceAttributes", [])
+        subnet_services = action.get("actionParams", {}).get(
+            "subnetServiceAttributes", []
+        )
         self.attributes = SubnetAttributes(subnet_services)
         self.cidr = self.attributes.cidr or action.get("actionParams", {}).get("cidr")
         default_alias = "Subnet {}".format(self.cidr)
@@ -54,9 +62,18 @@ class SubnetRequest(object):
 
 
 class PrepareOCISubnetActionResult(PrepareSubnetActionResult):
-    def __init__(self, virtual_network_id="", action_id='', success=True, info_message='', error_message='',
-                 subnet_id=''):
-        PrepareSubnetActionResult.__init__(self, action_id, success, info_message, error_message, subnet_id)
+    def __init__(
+        self,
+        virtual_network_id="",
+        action_id="",
+        success=True,
+        info_message="",
+        error_message="",
+        subnet_id="",
+    ):
+        PrepareSubnetActionResult.__init__(
+            self, action_id, success, info_message, error_message, subnet_id
+        )
         self.virtual_network_id = virtual_network_id
 
 
@@ -66,9 +83,14 @@ class PrepareSandboxInfraRequest(object):
         self._driver_request = json_request.get("driverRequest")
         self._actions = self._driver_request.get("actions")
         self._vcn_list = []
+        self._vcn_names_dict = {}
         self._keys_action_id = None
         self.is_default_flow = True
         self._resource_config = resource_config
+
+    @property
+    def vcn_names_dict(self):
+        return self._vcn_names_dict
 
     @property
     def vcn_list(self):
@@ -106,18 +128,36 @@ class PrepareSandboxInfraRequest(object):
                 vcn_alias_match = re.search(r"(?P<name>^.*)\s+-\s+\d+\.", subnet.alias)
                 if vcn_alias_match:
                     net = ipaddress.ip_network(cidr)
-                    vcn_name = "{} - {}-{}".format(vcn_alias_match.groupdict().get("name", "VCN"),
-                                                   net.network_address,
-                                                   net.num_addresses)
+                    vcn_name = "{} - {}-{}".format(
+                        vcn_alias_match.groupdict().get("name", "VCN"),
+                        net.network_address,
+                        net.num_addresses,
+                    )
                 else:
                     vcn_name = "VCN-{}".format(cidr.replace("/", "-"))
-                if subnet.alias != vcn_name:
-                    self._resource_config.api.SetServiceName(self._resource_config.reservation_id,
-                                                             subnet.alias,
-                                                             vcn_name)
+                if (
+                    subnet.alias != vcn_name
+                    and subnet.attributes.request_cidr  # noqa #W503
+                    and self._check_cidr_in_subnet_name(subnet)  # noqa #W503
+                ):
+                    self._vcn_names_dict[vcn_name] = subnet.alias
                     subnet.alias = vcn_name
             elif main_vcn:
                 main_vcn.subnet_list.append(subnet)
-        if does_vcn_act_as_subnet and any(x for x in subnet_dict.values() if not x.attributes.is_vcn):
-            raise OciShellError("Mixed connectivity mode is unsupported: "
-                                "please use only Subnet Services or only VCN Services")
+        if does_vcn_act_as_subnet and any(
+            x for x in subnet_dict.values() if not x.attributes.is_vcn
+        ):
+            raise OciShellError(
+                "Mixed connectivity mode is unsupported: "
+                "please use only Subnet Services or only VCN Services"
+            )
+
+    def _check_cidr_in_subnet_name(self, subnet):
+        """Check if first three octets of subnet cidr is in subnet name.
+
+        :type subnet: SubnetRequest
+        """
+        alloc_cidr = subnet.attributes.allocated_cidr
+        alloc_cidr_pattern = alloc_cidr[: alloc_cidr.rfind(".")]
+        if alloc_cidr_pattern in subnet.alias:
+            return True
