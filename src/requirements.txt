@@ -3,4 +3,4 @@ cloudshell-cp-core>=1.0.4.89,<1.1
 cloudshell-automation-api>=9.3
 oci>=2.0,<3
 requests>=2.0,<3
-cryptography<=2.9.0
+cryptography==3.2.1
